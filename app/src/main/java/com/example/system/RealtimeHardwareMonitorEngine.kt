@@ -34,6 +34,7 @@ data class RealtimeHardwareData(
     val batteryPercent: Int,
     val batteryVoltageMv: Int,
     val batteryTempC: Float,
+    val batteryCurrentMa: Int,
     val isCharging: Boolean,
     val networkRxKbps: Float,
     val networkTxKbps: Float,
@@ -43,7 +44,9 @@ data class RealtimeHardwareData(
     val hardwareSoc: String,
     val androidVersion: String,
     val kernelRelease: String,
-    val uptimeFormatted: String
+    val uptimeFormatted: String,
+    val isTelemetryReal: Boolean = true,
+    val telemetryNotes: List<String> = emptyList()
 )
 
 class RealtimeHardwareMonitorEngine(private val context: Context) {
@@ -56,44 +59,53 @@ class RealtimeHardwareMonitorEngine(private val context: Context) {
     private var lastTotalTxBytes: Long = 0L
     private var lastNetworkSampleTimeMs: Long = 0L
 
-    private var lastTotalCpuTime: Long = 0L
-    private var lastIdleCpuTime: Long = 0L
+    private val lastCoreTimes = HashMap<Int, Pair<Long, Long>>()
+    private var lastAggregateTimes: Pair<Long, Long>? = null
 
-    private var isProcStatReadable: Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.O
-    private var isSysCpuFreqReadable: Boolean = false
-    private var isSysThermalReadable: Boolean = false
-    private var isProcMeminfoReadable: Boolean = false
-    private var cachedMaxRefreshRate: Int = 120
+    private var procStatProbed = false
+    private var procStatOk = false
+    private var sysCpuFreqProbed = false
+    private var sysCpuFreqOk = false
+    private var thermalProbed = false
+    private var thermalOk = false
+    private var meminfoProbed = false
+    private var meminfoOk = false
+
+    private var cachedMaxRefreshRate: Int = 60
 
     init {
         lastTotalRxBytes = TrafficStats.getTotalRxBytes()
         lastTotalTxBytes = TrafficStats.getTotalTxBytes()
         lastNetworkSampleTimeMs = SystemClock.elapsedRealtime()
-        cachedMaxRefreshRate = getDisplayMaxRefreshRate()
+        cachedMaxRefreshRate = readDisplayMaxRefreshRate()
     }
 
     suspend fun sampleTelemetry(
         activeGovernorMode: GovernorMode,
-        configuredRefreshRateHz: Int = 120,
+        configuredRefreshRateHz: Int = 0,
         isFpsLockBypassActive: Boolean = true
     ): RealtimeHardwareData = withContext(Dispatchers.IO) {
         val now = SystemClock.elapsedRealtime()
+        val notes = mutableListOf<String>()
 
-        val cpuUsage = readCpuUsagePercent()
+        val cpuUsage = readCpuUsagePercent(notes)
+        val cores = readCpuCores(notes)
 
-        val cores = readCpuCores(cpuUsage)
+        val battery = readBatteryStatus()
+        if (!battery.second) notes += "Suhu/tegangan baterai tidak dilaporkan oleh driver perangkat."
 
-        val (batPct, batMv, batTemp, isCharging) = readBatteryStatus()
-        val cpuTemp = readCpuThermal(fallbackTemp = batTemp)
+        val cpuTemp = readCpuThermal()
+        if (cpuTemp == null) notes += "Sensor suhu CPU tidak terekspos di /sys/class/thermal."
 
         val memInfo = ActivityManager.MemoryInfo()
         activityManager?.getMemoryInfo(memInfo)
-        val totalRamMb = (memInfo.totalMem / (1024 * 1024)).coerceAtLeast(2048L)
-        val availRamMb = (memInfo.availMem / (1024 * 1024))
-        val usedRamMb = (totalRamMb - availRamMb).coerceAtLeast(100L)
-        val ramUsagePct = ((usedRamMb.toFloat() / totalRamMb) * 100).roundToInt().coerceIn(5, 98)
+        val totalRamMb = (memInfo.totalMem / (1024 * 1024)).coerceAtLeast(1L)
+        val availRamMb = memInfo.availMem / (1024 * 1024)
+        val usedRamMb = (totalRamMb - availRamMb).coerceAtLeast(0L)
+        val ramUsagePct = ((usedRamMb.toFloat() / totalRamMb) * 100).roundToInt().coerceIn(0, 100)
 
-        val (zramUsed, zramTotal) = readZramStats(totalRamMb)
+        val (zramUsed, zramTotal) = readZramStats()
+        if (zramTotal == 0L) notes += "ZRAM tidak aktif / tidak terdeteksi."
 
         val curRx = TrafficStats.getTotalRxBytes()
         val curTx = TrafficStats.getTotalTxBytes()
@@ -101,34 +113,20 @@ class RealtimeHardwareMonitorEngine(private val context: Context) {
 
         val rxKbps = if (lastTotalRxBytes > 0 && curRx >= lastTotalRxBytes) {
             ((curRx - lastTotalRxBytes) * 1000f) / (deltaMs * 1024f)
-        } else {
-            (Math.random() * 45.0 + 15.0).toFloat()
-        }
-
+        } else 0f
         val txKbps = if (lastTotalTxBytes > 0 && curTx >= lastTotalTxBytes) {
             ((curTx - lastTotalTxBytes) * 1000f) / (deltaMs * 1024f)
-        } else {
-            (Math.random() * 20.0 + 5.0).toFloat()
-        }
+        } else 0f
 
         lastTotalRxBytes = curRx
         lastTotalTxBytes = curTx
         lastNetworkSampleTimeMs = now
 
-        val hardwareMaxRate = getDisplayMaxRefreshRate()
-        val targetHz = if (configuredRefreshRateHz > 0) configuredRefreshRateHz else hardwareMaxRate
-        val effectiveRefreshRate = maxOf(targetHz, hardwareMaxRate)
+        val panelMax = readDisplayMaxRefreshRate()
+        cachedMaxRefreshRate = panelMax
 
-        val activeFps = if (isFpsLockBypassActive || activeGovernorMode == GovernorMode.TURBO || activeGovernorMode == GovernorMode.AI_EXTREME) {
-            targetHz
-        } else {
-            when (activeGovernorMode) {
-                GovernorMode.BALANCED -> (targetHz * 0.9f).roundToInt().coerceAtLeast(60)
-                GovernorMode.ECO -> 60.coerceAtMost(targetHz)
-                GovernorMode.STOCK_OEM -> 60.coerceAtMost(targetHz)
-                else -> targetHz
-            }
-        }
+        val currentRefresh = readCurrentRefreshRate()
+        val activeFps = currentRefresh
 
         val uptimeSec = SystemClock.elapsedRealtime() / 1000
         val h = uptimeSec / 3600
@@ -136,244 +134,336 @@ class RealtimeHardwareMonitorEngine(private val context: Context) {
         val s = uptimeSec % 60
         val uptimeStr = String.format("%02d:%02d:%02d", h, m, s)
 
-        val deviceModel = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
-        val hardwareSoc = if (Build.HARDWARE.isNotBlank() && !Build.HARDWARE.equals("unknown", ignoreCase = true)) {
-            Build.HARDWARE
-        } else {
-            Build.BOARD.ifBlank { "Universal ARM64" }
-        }
-        val androidVer = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
-        val kernel = System.getProperty("os.version") ?: "6.6-android-universal"
+        val profile = DeviceProfileEngine.detect(context)
 
         RealtimeHardwareData(
             cpuUsagePercent = cpuUsage,
             cpuCores = cores,
-            cpuTempC = cpuTemp,
+            cpuTempC = cpuTemp ?: -1f,
             ramUsedMb = usedRamMb,
             ramTotalMb = totalRamMb,
             ramUsagePercent = ramUsagePct,
             zramUsedMb = zramUsed,
             zramTotalMb = zramTotal,
-            batteryPercent = batPct,
-            batteryVoltageMv = batMv,
-            batteryTempC = batTemp,
-            isCharging = isCharging,
-            networkRxKbps = rxKbps.coerceAtLeast(0.1f),
-            networkTxKbps = txKbps.coerceAtLeast(0.1f),
-            maxDisplayRefreshRateHz = effectiveRefreshRate,
+            batteryPercent = battery.first,
+            batteryVoltageMv = battery.third,
+            batteryTempC = battery.fourth,
+            batteryCurrentMa = battery.fifth,
+            isCharging = battery.sixth,
+            networkRxKbps = rxKbps.coerceAtLeast(0f),
+            networkTxKbps = txKbps.coerceAtLeast(0f),
+            maxDisplayRefreshRateHz = panelMax,
             activeFps = activeFps,
-            deviceModel = deviceModel,
-            hardwareSoc = hardwareSoc,
-            androidVersion = androidVer,
-            kernelRelease = kernel,
-            uptimeFormatted = uptimeStr
+            deviceModel = "${profile.manufacturer} ${profile.model}",
+            hardwareSoc = profile.socHardware,
+            androidVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            kernelRelease = profile.kernelRelease,
+            uptimeFormatted = uptimeStr,
+            isTelemetryReal = notes.isEmpty(),
+            telemetryNotes = notes
         )
     }
 
-    private fun readCpuUsagePercent(): Int {
-        if (!isProcStatReadable) {
-            val base = 14 + (Math.random() * 12).toInt()
-            return base.coerceIn(5, 95)
+
+    private fun probeProcStat(): Boolean {
+        if (!procStatProbed) {
+            procStatProbed = true
+            procStatOk = try {
+                val f = File("/proc/stat")
+                f.exists() && f.canRead() && f.length() > 0
+            } catch (_: Exception) {
+                false
+            }
+        }
+        return procStatOk
+    }
+
+    private fun parseCpuLine(tokens: List<String>): Pair<Long, Long>? {
+        if (tokens.size < 5) return null
+        val user = tokens[1].toLongOrNull() ?: return null
+        val nice = tokens[2].toLongOrNull() ?: 0L
+        val system = tokens[3].toLongOrNull() ?: 0L
+        val idle = tokens[4].toLongOrNull() ?: 0L
+        val iowait = tokens.getOrNull(5)?.toLongOrNull() ?: 0L
+        val irq = tokens.getOrNull(6)?.toLongOrNull() ?: 0L
+        val softirq = tokens.getOrNull(7)?.toLongOrNull() ?: 0L
+        val steal = tokens.getOrNull(8)?.toLongOrNull() ?: 0L
+        val total = user + nice + system + idle + iowait + irq + softirq + steal
+        val idleAll = idle + iowait
+        return Pair(total, idleAll)
+    }
+
+    private fun readCpuUsagePercent(notes: MutableList<String>): Int {
+        if (!probeProcStat()) {
+            notes += "Akses /proc/stat diblokir — beban CPU tidak bisa dibaca (Android 10+ membatasi /proc untuk app)."
+            return -1
         }
         return try {
-            val statFile = File("/proc/stat")
-            if (!statFile.exists() || !statFile.canRead()) {
-                isProcStatReadable = false
-                return 15 + (Math.random() * 12).toInt()
-            }
-            val reader = RandomAccessFile(statFile, "r")
-            val load = reader.readLine()
-            reader.close()
-            val toks = load.split("\\s+".toRegex())
-            if (toks.size >= 5 && toks[0] == "cpu") {
-                val user = toks[1].toLong()
-                val nice = toks[2].toLong()
-                val system = toks[3].toLong()
-                val idle = toks[4].toLong()
-                val iowait = if (toks.size > 5) toks[5].toLong() else 0L
-                val irq = if (toks.size > 6) toks[6].toLong() else 0L
-                val softirq = if (toks.size > 7) toks[7].toLong() else 0L
+            val lines = File("/proc/stat").readLines()
+            val aggregate = lines.firstOrNull { it.startsWith("cpu ") }?.let {
+                parseCpuLine(it.split("\\s+".toRegex()))
+            } ?: return -1
 
-                val total = user + nice + system + idle + iowait + irq + softirq
-                val totalIdle = idle + iowait
+            val prev = lastAggregateTimes
+            lastAggregateTimes = aggregate
+            if (prev == null) return -1
 
-                if (lastTotalCpuTime > 0 && total > lastTotalCpuTime) {
-                    val deltaTotal = total - lastTotalCpuTime
-                    val deltaIdle = totalIdle - lastIdleCpuTime
-                    val usage = (1.0f - (deltaIdle.toFloat() / deltaTotal)) * 100f
+            val dTotal = aggregate.first - prev.first
+            val dIdle = aggregate.second - prev.second
+            if (dTotal <= 0) return -1
 
-                    lastTotalCpuTime = total
-                    lastIdleCpuTime = totalIdle
-                    return usage.roundToInt().coerceIn(3, 99)
-                }
-
-                lastTotalCpuTime = total
-                lastIdleCpuTime = totalIdle
-            }
-            15 + (Math.random() * 12).toInt()
+            val usage = (1.0f - (dIdle.toFloat() / dTotal.toFloat())) * 100f
+            usage.roundToInt().coerceIn(0, 100)
         } catch (_: Exception) {
-            isProcStatReadable = false
-            15 + (Math.random() * 12).toInt()
+            notes += "Gagal membaca /proc/stat."
+            -1
         }
     }
 
-    private fun readCpuCores(overallCpuLoad: Int): List<RealtimeCoreTelemetry> {
-        val coreCount = Runtime.getRuntime().availableProcessors().coerceIn(4, 16)
+    private fun readCpuCores(notes: MutableList<String>): List<RealtimeCoreTelemetry> {
+        val coreCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 32)
         val list = mutableListOf<RealtimeCoreTelemetry>()
 
-        for (i in 0 until coreCount.coerceAtMost(8)) {
-            var curFreqKhz = 0L
-            if (isSysCpuFreqReadable) {
-                try {
-                    val freqFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq")
-                    val maxFreqFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
-                    if (freqFile.exists() && freqFile.canRead()) {
-                        curFreqKhz = freqFile.readText().trim().toLongOrNull() ?: 0L
+        val perCoreUsage = HashMap<Int, Int>()
+        if (probeProcStat()) {
+            try {
+                File("/proc/stat").readLines().forEach { line ->
+                    val tokens = line.split("\\s+".toRegex())
+                    val name = tokens.firstOrNull() ?: return@forEach
+                    if (!name.startsWith("cpu") || name == "cpu") return@forEach
+                    val idx = name.removePrefix("cpu").toIntOrNull() ?: return@forEach
+                    val parsed = parseCpuLine(tokens) ?: return@forEach
+                    val prev = lastCoreTimes[idx]
+                    lastCoreTimes[idx] = parsed
+                    if (prev != null) {
+                        val dTotal = parsed.first - prev.first
+                        val dIdle = parsed.second - prev.second
+                        if (dTotal > 0) {
+                            perCoreUsage[idx] =
+                                ((1.0f - dIdle.toFloat() / dTotal.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
+                        }
                     }
-                    if (curFreqKhz <= 0 && maxFreqFile.exists() && maxFreqFile.canRead()) {
-                        curFreqKhz = maxFreqFile.readText().trim().toLongOrNull() ?: 0L
-                    }
-                } catch (_: Exception) {
-                    isSysCpuFreqReadable = false
                 }
+            } catch (_: Exception) {
+            }
+        }
+
+        val maxFreqByCore = HashMap<Int, Long>()
+        for (i in 0 until coreCount) {
+            val f = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+            if (f.exists() && f.canRead()) {
+                f.readText().trim().toLongOrNull()?.let { maxFreqByCore[i] = it }
+            }
+        }
+        val distinctFreqs = maxFreqByCore.values.distinct().sorted()
+
+        for (i in 0 until coreCount) {
+            val curFreqKhz = readCurrentFreqKhz(i)
+            val maxKhz = maxFreqByCore[i]
+
+            val clusterLabel = when {
+                distinctFreqs.size <= 1 || maxKhz == null -> "CORE"
+                maxKhz == distinctFreqs.first() -> "LITTLE"
+                maxKhz == distinctFreqs.last() -> "PRIME"
+                else -> "MID"
             }
 
-            val (name, fallbackGhz, loadMult) = when {
-                i < 4 -> Triple("LITTLE ($i)", "1.80 GHz", 0.9f)
-                i < 7 -> Triple("MID ($i)", "2.85 GHz", 1.15f)
-                else -> Triple("PRIME ($i)", "3.36 GHz", 1.35f)
+            val freqStr = when {
+                curFreqKhz > 0 -> String.format("%.2f GHz", curFreqKhz / 1_000_000.0)
+                maxKhz != null -> String.format("%.2f GHz (max)", maxKhz / 1_000_000.0)
+                else -> "—"
             }
 
-            val freqStr = if (curFreqKhz > 100_000) {
-                String.format("%.2f GHz", curFreqKhz / 1_000_000.0)
-            } else {
-                fallbackGhz
-            }
-
-            val coreLoad = (overallCpuLoad * loadMult).roundToInt().coerceIn(2, 100)
             list.add(
                 RealtimeCoreTelemetry(
                     coreIndex = i,
-                    name = name,
+                    name = "$clusterLabel ($i)",
                     frequencyGhz = freqStr,
-                    loadPercent = coreLoad
+                    loadPercent = perCoreUsage[i] ?: -1
                 )
             )
         }
 
-        return if (list.isNotEmpty()) list else listOf(
-            RealtimeCoreTelemetry(0, "LITTLE (0-3)", "1.80 GHz", overallCpuLoad.coerceAtLeast(8)),
-            RealtimeCoreTelemetry(4, "MID (4-6)", "2.85 GHz", (overallCpuLoad * 1.15f).roundToInt().coerceIn(5, 100)),
-            RealtimeCoreTelemetry(7, "PRIME (7)", "3.36 GHz", (overallCpuLoad * 1.35f).roundToInt().coerceIn(5, 100))
-        )
+        if (maxFreqByCore.isEmpty()) {
+            notes += "Frekuensi CPU tidak bisa dibaca dari /sys (butuh root atau dibatasi kernel)."
+        }
+        return list
     }
 
-    private fun readBatteryStatus(): Quadruple<Int, Int, Float, Boolean> {
+    private fun readCurrentFreqKhz(coreIndex: Int): Long {
+        if (!sysCpuFreqProbed) {
+            sysCpuFreqProbed = true
+            sysCpuFreqOk = File("/sys/devices/system/cpu/cpu0/cpufreq").let { it.exists() && it.canRead() }
+        }
+        if (!sysCpuFreqOk) return 0L
         return try {
-            val pct = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 } ?: 85
-            val isCharging = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                batteryManager?.isCharging ?: false
-            } else {
-                false
-            }
-            val tempC = 34.5f
-            val voltage = 4180
-
-            Quadruple(pct, voltage, tempC, isCharging)
+            val f = File("/sys/devices/system/cpu/cpu$coreIndex/cpufreq/scaling_cur_freq")
+            if (f.exists() && f.canRead()) f.readText().trim().toLongOrNull() ?: 0L else 0L
         } catch (_: Exception) {
-            Quadruple(85, 4180, 34.5f, false)
+            0L
         }
     }
 
-    private fun readCpuThermal(fallbackTemp: Float): Float {
-        if (!isSysThermalReadable) {
-            return (fallbackTemp + 1.8f).coerceIn(24.0f, 75.0f)
-        }
+
+    private fun readBatteryStatus(): Sextuple<Int, Boolean, Int, Float, Int, Boolean> {
+        var pct = -1
+        var voltageMv = 0
+        var tempC = -1f
+        var hasTemp = false
+        var charging = false
 
         try {
-            val thermalDir = File("/sys/class/thermal")
-            if (thermalDir.exists() && thermalDir.isDirectory && thermalDir.canRead()) {
-                val zones = thermalDir.listFiles { f -> f.name.startsWith("thermal_zone") }
-                if (zones != null) {
-                    for (z in zones) {
-                        val tempFile = File(z, "temp")
-                        val typeFile = File(z, "type")
-                        if (tempFile.exists() && tempFile.canRead()) {
-                            val tempVal = tempFile.readText().trim().toFloatOrNull() ?: continue
-                            val typeVal = if (typeFile.exists() && typeFile.canRead()) typeFile.readText().trim() else ""
+            val intent: Intent? = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            if (intent != null) {
+                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                if (level >= 0 && scale > 0) pct = (level * 100f / scale).roundToInt()
 
-                            var normalizedTemp = tempVal
-                            if (normalizedTemp > 1000f) normalizedTemp /= 1000f
-                            else if (normalizedTemp > 100f) normalizedTemp /= 10f
+                voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
 
-                            if (normalizedTemp in 20f..105f) {
-                                if (typeVal.contains("cpu", ignoreCase = true) ||
-                                    typeVal.contains("soc", ignoreCase = true) ||
-                                    typeVal.contains("tsens", ignoreCase = true)
-                                ) {
-                                    return normalizedTemp
-                                }
-                            }
-                        }
-                    }
+                val rawTemp = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+                if (rawTemp != Int.MIN_VALUE) {
+                    tempC = rawTemp / 10f
+                    hasTemp = true
                 }
-            } else {
-                isSysThermalReadable = false
+
+                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
             }
         } catch (_: Exception) {
-            isSysThermalReadable = false
         }
 
-        return (fallbackTemp + 1.8f).coerceIn(24.0f, 75.0f)
-    }
-
-    private fun readZramStats(totalRamMb: Long): Pair<Long, Long> {
-        val totalZramMb = (totalRamMb * 0.5f).toLong().coerceIn(2048L, 12288L)
-        var usedZramMb = (totalZramMb * 0.28f).toLong()
-
-        if (isProcMeminfoReadable) {
-            try {
-                val meminfo = File("/proc/meminfo")
-                if (meminfo.exists() && meminfo.canRead()) {
-                    var swapTotalKb = 0L
-                    var swapFreeKb = 0L
-                    meminfo.forEachLine { line ->
-                        if (line.startsWith("SwapTotal:")) {
-                            swapTotalKb = line.substringAfter(":").trim().substringBefore(" ").trim().toLongOrNull() ?: 0L
-                        } else if (line.startsWith("SwapFree:")) {
-                            swapFreeKb = line.substringAfter(":").trim().substringBefore(" ").trim().toLongOrNull() ?: 0L
-                        }
-                    }
-                    if (swapTotalKb > 0) {
-                        val zTotal = swapTotalKb / 1024
-                        val zUsed = ((swapTotalKb - swapFreeKb) / 1024).coerceAtLeast(0)
-                        return Pair(zUsed, zTotal)
-                    }
-                } else {
-                    isProcMeminfoReadable = false
-                }
+        if (pct < 0) {
+            pct = try {
+                batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 } ?: -1
             } catch (_: Exception) {
-                isProcMeminfoReadable = false
+                -1
+            }
+        }
+        if (!charging) {
+            charging = try {
+                batteryManager?.isCharging ?: false
+            } catch (_: Exception) {
+                false
             }
         }
 
-        return Pair(usedZramMb, totalZramMb)
+        val currentUa = try {
+            batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
+        } catch (_: Exception) {
+            0
+        }
+        val currentMa = currentUa / 1000
+
+        return Sextuple(pct.coerceIn(0, 100), hasTemp, voltageMv, tempC, currentMa, charging)
     }
 
-    private fun getDisplayMaxRefreshRate(): Int {
-        return try {
-            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.display
-            } else {
-                @Suppress("DEPRECATION")
-                windowManager?.defaultDisplay
-            }
-            val rates = display?.supportedModes?.map { it.refreshRate.roundToInt() } ?: emptyList()
-            rates.maxOrNull() ?: (display?.mode?.refreshRate?.roundToInt() ?: 120)
-        } catch (e: Exception) {
-            120
+
+    private fun readCpuThermal(): Float? {
+        if (!thermalProbed) {
+            thermalProbed = true
+            val dir = File("/sys/class/thermal")
+            thermalOk = dir.exists() && dir.isDirectory && dir.canRead()
         }
+        if (!thermalOk) return null
+
+        return try {
+            val zones = File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }
+                ?: return null
+
+            var best: Float? = null
+            for (z in zones) {
+                val tempFile = File(z, "temp")
+                if (!tempFile.exists() || !tempFile.canRead()) continue
+                val raw = tempFile.readText().trim().toFloatOrNull() ?: continue
+                val typeFile = File(z, "type")
+                val type = if (typeFile.exists() && typeFile.canRead()) typeFile.readText().trim() else ""
+
+                var t = raw
+                if (t > 1000f) t /= 1000f
+                else if (t > 200f) t /= 10f
+                if (t !in 5f..125f) continue
+
+                val isCpuZone = type.contains("cpu", true) || type.contains("soc", true) ||
+                    type.contains("tsens", true) || type.contains("ap", true) ||
+                    type.contains("cluster", true) || type.contains("mtk", true)
+
+                if (isCpuZone && (best == null || t > best!!)) best = t
+            }
+            best
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+
+    private fun readZramStats(): Pair<Long, Long> {
+        if (!meminfoProbed) {
+            meminfoProbed = true
+            val f = File("/proc/meminfo")
+            meminfoOk = f.exists() && f.canRead()
+        }
+        if (!meminfoOk) return Pair(0L, 0L)
+
+        return try {
+            var swapTotalKb = 0L
+            var swapFreeKb = 0L
+            File("/proc/meminfo").forEachLine { line ->
+                when {
+                    line.startsWith("SwapTotal:") ->
+                        swapTotalKb = line.substringAfter(":").trim().substringBefore(" ").toLongOrNull() ?: 0L
+                    line.startsWith("SwapFree:") ->
+                        swapFreeKb = line.substringAfter(":").trim().substringBefore(" ").toLongOrNull() ?: 0L
+                }
+            }
+            if (swapTotalKb <= 0) {
+                Pair(0L, 0L)
+            } else {
+                val total = swapTotalKb / 1024
+                val used = ((swapTotalKb - swapFreeKb) / 1024).coerceAtLeast(0L)
+                Pair(used, total)
+            }
+        } catch (_: Exception) {
+            Pair(0L, 0L)
+        }
+    }
+
+
+    private fun resolveDisplay(): android.view.Display? = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.display
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager?.defaultDisplay
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun readDisplayMaxRefreshRate(): Int = try {
+        val display = resolveDisplay()
+        display?.supportedModes?.maxOfOrNull { it.refreshRate.roundToInt() }
+            ?: display?.mode?.refreshRate?.roundToInt()
+            ?: 60
+    } catch (_: Exception) {
+        60
+    }
+
+    private fun readCurrentRefreshRate(): Int = try {
+        val display = resolveDisplay()
+        val modeRate = display?.mode?.refreshRate?.roundToInt() ?: 0
+        if (modeRate > 0) modeRate else cachedMaxRefreshRate
+    } catch (_: Exception) {
+        cachedMaxRefreshRate
     }
 }
 
-data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+data class Sextuple<A, B, C, D, E, F>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D,
+    val fifth: E,
+    val sixth: F
+)

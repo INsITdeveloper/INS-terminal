@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.telephony.CellInfoGsm
+import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellInfoWcdma
@@ -415,14 +416,20 @@ class SignalLockerEngine private constructor(private val context: Context) {
                 "Tidak Ada Koneksi"
             }
 
-            var bars = 3
-            var dbm = -85
-            var asu = 16
+            var bars = -1
+            var dbm = Int.MIN_VALUE
+            var asu = -1
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 tm?.signalStrength?.let { ss ->
-                    bars = ss.level
-                    dbm = -113 + (bars * 15)
+                    if (ss.level > 0) bars = ss.level
+                    val strengths = ss.cellSignalStrengths
+                    val css = strengths.firstOrNull()
+                    if (css != null) {
+                        if (css.dbm != CellInfo.UNAVAILABLE) dbm = css.dbm
+                        if (css.asuLevel != CellInfo.UNAVAILABLE) asu = css.asuLevel
+                        if (css.level > 0) bars = css.level
+                    }
                 }
             }
 
@@ -516,9 +523,9 @@ class SignalLockerEngine private constructor(private val context: Context) {
             val addr = InetAddress.getByName("1.1.1.1")
             val reachable = addr.isReachable(600)
             val delta = System.currentTimeMillis() - start
-            if (reachable && delta > 0) delta else 18L
+            if (reachable && delta > 0) delta else -1L
         } catch (_: Exception) {
-            16L + (Math.random() * 8).toLong()
+            -1L
         }
     }
 }
