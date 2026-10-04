@@ -41,7 +41,35 @@ class AdbShellEngine private constructor(private val context: Context) {
 
     fun canExecute(): Boolean = isSupported() && isConnected()
 
-    fun pair(port: Int, code: String): Pair<Boolean, String> {
+    /**
+     * Daftar host yang dicoba saat pairing/connect, berurutan.
+     *
+     * PENTING: pada banyak perangkat (ColorOS/Xiaomi/Samsung) server pairing adbd TIDAK
+     * listen di 127.0.0.1, hanya di alamat IP Wi-Fi perangkat. Karena itu kita coba
+     * loopback dulu, lalu semua alamat IPv4 lokal perangkat (termasuk IP Wi-Fi).
+     */
+    fun candidateHosts(): List<String> {
+        val hosts = mutableListOf<String>()
+        hosts += "127.0.0.1"
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            for (nif in interfaces) {
+                if (!nif.isUp || nif.isLoopback) continue
+                for (addr in nif.inetAddresses) {
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                        addr.hostAddress?.let { if (!hosts.contains(it)) hosts += it }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return hosts
+    }
+
+    /** Alamat IPv4 Wi-Fi utama (dipakai untuk info ke user). */
+    fun primaryLanAddress(): String? = candidateHosts().firstOrNull { it != "127.0.0.1" }
+
+    fun pair(port: Int, code: String, preferredHost: String? = null): Pair<Boolean, String> {
         if (!isSupported()) {
             return false to "Pairing ADB nirkabel hanya tersedia di Android 11 ke atas."
         }
@@ -49,45 +77,62 @@ class AdbShellEngine private constructor(private val context: Context) {
         val clean = code.trim()
         if (clean.length < 6) return false to "Kode pairing harus 6 digit."
 
-        return try {
-            manager.setHostAddress("127.0.0.1")
-            manager.setApi(Build.VERSION.SDK_INT)
-            val ok = manager.pair(port, clean)
-            pairedFlag = ok
-            if (ok) {
-                lastErrorValue = null
-                true to "Pairing berhasil. Sekarang jalankan: adb connect <port>"
-            } else {
-                false to "Pairing ditolak perangkat."
+        val hosts = buildList {
+            if (!preferredHost.isNullOrBlank()) add(preferredHost)
+            addAll(candidateHosts())
+        }.distinct()
+
+        var lastMsg = "Pairing gagal."
+        for (host in hosts) {
+            try {
+                manager.setHostAddress(host)
+                manager.setApi(Build.VERSION.SDK_INT)
+                val ok = manager.pair(port, clean)
+                if (ok) {
+                    pairedFlag = true
+                    lastErrorValue = null
+                    return true to "Pairing berhasil (via $host:$port)."
+                }
+                lastMsg = "Pairing ditolak perangkat (via $host:$port)."
+            } catch (e: Throwable) {
+                lastErrorValue = e.message
+                lastMsg = "Pairing gagal via $host:$port: ${e.message ?: e.javaClass.simpleName}"
             }
-        } catch (e: Throwable) {
-            pairedFlag = false
-            lastErrorValue = e.message
-            false to "Pairing gagal: ${e.message ?: e.javaClass.simpleName}"
         }
+        pairedFlag = false
+        return false to lastMsg
     }
 
-    fun connect(port: Int): Pair<Boolean, String> {
+    fun connect(port: Int, preferredHost: String? = null): Pair<Boolean, String> {
         if (!isSupported()) return false to "ADB nirkabel butuh Android 11 ke atas."
         if (port <= 0) return false to "Port tidak valid."
-        return try {
-            manager.setHostAddress("127.0.0.1")
-            manager.setApi(Build.VERSION.SDK_INT)
-            val ok = manager.connect(port)
-            if (ok) {
-                connectedPortValue = port
-                lastErrorValue = null
-                true to "Terhubung ke ADB port $port sebagai user shell (UID 2000)."
-            } else {
-                false to "Koneksi ke port $port ditolak."
+
+        val hosts = buildList {
+            if (!preferredHost.isNullOrBlank()) add(preferredHost)
+            addAll(candidateHosts())
+        }.distinct()
+
+        var lastMsg = "Koneksi ke port $port ditolak."
+        for (host in hosts) {
+            try {
+                manager.setHostAddress(host)
+                manager.setApi(Build.VERSION.SDK_INT)
+                val ok = manager.connect(port)
+                if (ok) {
+                    connectedPortValue = port
+                    lastErrorValue = null
+                    return true to "Terhubung ke ADB $host:$port sebagai user shell (UID 2000)."
+                }
+                lastMsg = "Koneksi ke $host:$port ditolak."
+            } catch (e: AdbPairingRequiredException) {
+                lastErrorValue = e.message
+                lastMsg = "Perangkat belum dipasangkan (via $host:$port)."
+            } catch (e: Throwable) {
+                lastErrorValue = e.message
+                lastMsg = "Gagal konek $host:$port: ${e.message ?: e.javaClass.simpleName}"
             }
-        } catch (e: AdbPairingRequiredException) {
-            lastErrorValue = e.message
-            false to "Perangkat belum dipasangkan. Jalankan: adb pair <port> <kode>"
-        } catch (e: Throwable) {
-            lastErrorValue = e.message
-            false to "Gagal konek port $port: ${e.message ?: e.javaClass.simpleName}"
         }
+        return false to lastMsg
     }
 
     fun autoConnect(timeoutMs: Long = 8000L): Pair<Boolean, String> {

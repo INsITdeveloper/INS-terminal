@@ -6,33 +6,45 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+
+/** Endpoint ADB hasil penemuan mDNS: alamat host (bisa null) + port. */
+data class AdbEndpoint(val host: String?, val port: Int)
 
 /**
  * Penemu port ADB nirkabel lewat mDNS (NsdManager).
  *
  * Ini yang membuat app bisa "minta kode pairing"-nya saja seperti Shizuku:
- * port pairing & port koneksi ditemukan otomatis dari layanan yang di-advertise adbd,
- * sehingga user tidak perlu menyalin angka port secara manual.
+ * port pairing & port koneksi ditemukan otomatis dari layanan yang di-advertise adbd.
  *
  *  - `_adb-tls-pairing._tcp`  -> aktif HANYA saat dialog "Pair device with pairing code" terbuka.
  *  - `_adb-tls-connect._tcp`  -> aktif saat "Wireless debugging" menyala (port koneksi).
+ *
+ * PENTING: kita juga mengembalikan **alamat host** dari mDNS. Di banyak perangkat
+ * (ColorOS/Xiaomi), server pairing adbd tidak listen di 127.0.0.1 melainkan di IP Wi-Fi,
+ * sehingga mencoba 127.0.0.1 saja menghasilkan ECONNREFUSED.
  */
 object AdbMdnsDiscovery {
 
     const val TYPE_PAIRING = "_adb-tls-pairing._tcp"
     const val TYPE_CONNECT = "_adb-tls-connect._tcp"
 
-    fun discoverPairingPort(context: Context, timeoutMs: Long = 8000L): Int? =
+    fun discoverPairingEndpoint(context: Context, timeoutMs: Long = 8000L): AdbEndpoint? =
         discover(context, TYPE_PAIRING, timeoutMs)
 
-    fun discoverConnectPort(context: Context, timeoutMs: Long = 8000L): Int? =
+    fun discoverConnectEndpoint(context: Context, timeoutMs: Long = 8000L): AdbEndpoint? =
         discover(context, TYPE_CONNECT, timeoutMs)
 
-    private fun discover(context: Context, serviceType: String, timeoutMs: Long): Int? {
+    fun discoverPairingPort(context: Context, timeoutMs: Long = 8000L): Int? =
+        discoverPairingEndpoint(context, timeoutMs)?.port
+
+    fun discoverConnectPort(context: Context, timeoutMs: Long = 8000L): Int? =
+        discoverConnectEndpoint(context, timeoutMs)?.port
+
+    private fun discover(context: Context, serviceType: String, timeoutMs: Long): AdbEndpoint? {
         val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return null
         val latch = CountDownLatch(1)
-        val foundPort = AtomicInteger(-1)
+        val found = AtomicReference<AdbEndpoint?>(null)
 
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {}
@@ -44,8 +56,13 @@ object AdbMdnsDiscovery {
                         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
 
                         override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                            if (serviceInfo.port > 0 && foundPort.get() <= 0) {
-                                foundPort.set(serviceInfo.port)
+                            if (serviceInfo.port > 0 && found.get() == null) {
+                                val host = try {
+                                    serviceInfo.host?.hostAddress
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                found.set(AdbEndpoint(host, serviceInfo.port))
                                 latch.countDown()
                             }
                         }
@@ -70,8 +87,7 @@ object AdbMdnsDiscovery {
         return try {
             nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
             latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-            val p = foundPort.get()
-            if (p > 0) p else null
+            found.get()
         } catch (_: Exception) {
             null
         } finally {

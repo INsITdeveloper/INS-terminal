@@ -153,28 +153,38 @@ class AdbPairingService : Service() {
     private fun handleSubmittedCode(code: String) {
         workJob?.cancel()
         workJob = scope.launch {
-            val port = pairingPort
             if (code.isBlank()) {
                 notifyStatus("Kode kosong", "Tarik notifikasi, masukkan 6 digit kode, lalu kirim lagi.", withInput = true)
                 return@launch
             }
+
+            // PENTING: cek ulang endpoint pairing saat kode dikirim. Port bisa berubah /
+            // server pairing hanya hidup selama dialog pairing terbuka.
+            notifyStatus("Memproses pairing...", "Memeriksa ulang port pairing...", withInput = false)
+            val fresh = AdbMdnsDiscovery.discoverPairingEndpoint(this@AdbPairingService, 8000L)
+            val port = fresh?.port ?: pairingPort
+            val host = fresh?.host
+
             if (port <= 0) {
                 notifyStatus(
-                    "Port pairing belum terdeteksi",
-                    "Buka dialog \"Pair device with pairing code\" dulu, tunggu port terdeteksi, lalu kirim kode.",
+                    "Port pairing tidak terdeteksi",
+                    "Dialog \"Pair device with pairing code\" harus TETAP TERBUKA saat mengirim kode. " +
+                        "Buka dialog pairing, tunggu notifikasi berubah, lalu kirim kode. " +
+                        "Kalau tetap gagal, pakai cara manual di INS Terminal → ADB Nirkabel.",
                     withInput = false
                 )
                 return@launch
             }
 
-            notifyStatus("Memproses pairing...", "Menghubungkan ke port $port ...", withInput = false)
+            notifyStatus("Memproses pairing...", "Menghubungkan ke ${host ?: "auto"}:$port ...", withInput = false)
 
             val engine = AdbShellEngine.getInstance(applicationContext)
-            val (ok, msg) = engine.pair(port, code)
+            val (ok, msg) = engine.pair(port, code, host)
             if (!ok) {
                 notifyStatus(
                     "Pairing gagal",
-                    "$msg\nBuka lagi dialog pairing (kode baru) lalu kirim kode yang baru.",
+                    "$msg\n\nPastikan dialog pairing MASIH TERBUKA (kalau ditutup, server pairing mati → ECONNREFUSED). " +
+                        "Buka lagi dialog pairing (kode & port baru) lalu kirim kode baru.",
                     withInput = true
                 )
                 return@launch
@@ -188,9 +198,9 @@ class AdbPairingService : Service() {
                 return@launch
             }
 
-            val connectPort = AdbMdnsDiscovery.discoverConnectPort(applicationContext, 8000L)
-            if (connectPort != null && connectPort > 0) {
-                val (cOk, cMsg) = engine.connect(connectPort)
+            val connectEndpoint = AdbMdnsDiscovery.discoverConnectEndpoint(applicationContext, 8000L)
+            if (connectEndpoint != null && connectEndpoint.port > 0) {
+                val (cOk, cMsg) = engine.connect(connectEndpoint.port, connectEndpoint.host)
                 if (cOk) {
                     notifyStatus("✅ ADB tersambung", "$cMsg\nBuka INS Terminal untuk memakai tweak.", withInput = false)
                     delay(4000)
