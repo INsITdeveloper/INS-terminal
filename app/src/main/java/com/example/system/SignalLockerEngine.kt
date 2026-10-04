@@ -60,6 +60,13 @@ class SignalLockerEngine private constructor(private val context: Context) {
     private var totalPacketsSent = 0L
     private var totalRtoPrevented = 0L
 
+    /** Mode penguat sinyal aktif — dipakai agar keep-alive tidak bertabrakan dgn profil jaringan. */
+    @Volatile
+    private var boostMode: SignalBoostMode = SignalBoostMode.AUTO
+
+    /** EWMA (exponential weighted moving average) untuk meredam ping yang loncat-loncat (anti-jitter). */
+    private var smoothedPing = -1.0
+
     companion object {
         @Volatile
         private var INSTANCE: SignalLockerEngine? = null
@@ -239,6 +246,16 @@ class SignalLockerEngine private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Sinkronkan mode penguat sinyal (Wi-Fi / seluler / dual / auto) dengan engine keep-alive.
+     * Mencegah loop keep-alive "berebut" target ketika dua penguat dinyalakan bersamaan.
+     */
+    fun setBoostMode(mode: SignalBoostMode) {
+        boostMode = mode
+    }
+
+    fun currentBoostMode(): SignalBoostMode = boostMode
+
     private fun startKeepAliveEngine() {
         if (keepAliveJob?.isActive == true) return
 
@@ -270,12 +287,8 @@ class SignalLockerEngine private constructor(private val context: Context) {
 
                 if (socket == null || socket.isClosed) {
                     try {
-                        socket = DatagramSocket().apply {
-                            soTimeout = 400
-                            try {
-                                trafficClass = 0x10 or 0x08
-                            } catch (_: Exception) {}
-                        }
+                        // UDP low-latency: IP_TOS DSCP EF (0xB8) + timeout baca singkat.
+                        socket = NetworkOptimizerEngine.openLowLatencyDatagram(400)
                     } catch (_: Exception) {}
                 }
 
@@ -297,9 +310,7 @@ class SignalLockerEngine private constructor(private val context: Context) {
                     targetIdx++
                     try {
                         val elapsed = measureTimeMillis {
-                            Socket().use { s ->
-                                s.tcpNoDelay = true
-                                s.trafficClass = 0x10
+                            NetworkOptimizerEngine.openLowLatencySocket().use { s ->
                                 s.connect(InetSocketAddress("1.1.1.1", 53), 400)
                             }
                         }
@@ -313,7 +324,12 @@ class SignalLockerEngine private constructor(private val context: Context) {
                     }
                 }
 
-                val finalPing = if (isUltra && ping > 20L) (ping / 2).coerceAtLeast(1L) else ping
+                val rawPing = if (isUltra && ping > 20L) (ping / 2).coerceAtLeast(1L) else ping
+
+                // Anti-jitter: ratakan pembacaan ping dengan EWMA supaya angka tidak melompat liar.
+                smoothedPing = if (smoothedPing < 0) rawPing.toDouble()
+                else (smoothedPing * 0.7) + (rawPing * 0.3)
+                val finalPing = smoothedPing.toLong().coerceAtLeast(1L)
 
                 _signalStatus.value = _signalStatus.value.copy(
                     livePingMs = finalPing,

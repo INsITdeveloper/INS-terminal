@@ -51,6 +51,14 @@ fun TweaksScreen(
     val installedApps by viewModel.installedApps.collectAsState()
     val isLoadingApps by viewModel.isLoadingInstalledApps.collectAsState()
     val activeFloatingAppsCount by viewModel.activeFloatingAppsCount.collectAsState()
+    val hdCaptureResult by viewModel.hdCaptureResult.collectAsState()
+    val isHdRecording by viewModel.isHdRecording.collectAsState()
+    val adbStatusMessage by viewModel.adbStatusMessage.collectAsState()
+    val isAdbBusy by viewModel.isAdbBusy.collectAsState()
+    val privilegeStatus by viewModel.privilegeStatus.collectAsState()
+    var adbPairPort by remember { mutableStateOf("") }
+    var adbPairCode by remember { mutableStateOf("") }
+    var adbConnPort by remember { mutableStateOf("") }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedTabApps by remember { mutableStateOf("ALL") }
@@ -915,6 +923,178 @@ fun TweaksScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        item {
+            CyberSectionTitle(
+                title = "HD SCREENSHOT & REKAMAN (NATIVE RES)",
+                icon = Icons.Default.PhotoCamera,
+                accentColor = NeonCyan
+            )
+        }
+
+        item {
+            CyberCard(borderColor = NeonCyan) {
+                Text(
+                    text = "Screenshot PNG lossless di resolusi panel penuh (tanpa downscale, tidak pecah saat di-zoom). Rekaman MP4 H.264 bitrate tinggi.",
+                    color = TermMuted,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { viewModel.captureHdScreenshot() },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .testTag("btn_hd_screenshot"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CyberSurfaceDark,
+                            contentColor = TermWhite
+                        ),
+                        border = BorderStroke(1.dp, NeonCyan)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = NeonCyan)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("SCREENSHOT HD", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    Button(
+                        onClick = { viewModel.toggleHdRecording(!isHdRecording) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .testTag("btn_hd_record"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isHdRecording) NeonCrimson.copy(alpha = 0.25f) else CyberSurfaceDark,
+                            contentColor = TermWhite
+                        ),
+                        border = BorderStroke(1.dp, if (isHdRecording) NeonCrimson else NeonCyan)
+                    ) {
+                        Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isHdRecording) NeonCrimson else NeonCyan)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isHdRecording) "STOP REKAM" else "REKAM HD", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                hdCaptureResult?.let { result ->
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = result.message,
+                        color = if (result.isSuccess) NeonEmerald else NeonCrimson,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+
+        item {
+            CyberSectionTitle(
+                title = "ADB NIRKABEL (TANPA ROOT)",
+                icon = Icons.Default.Wifi,
+                accentColor = NeonAmber
+            )
+        }
+
+        item {
+            CyberCard(borderColor = NeonAmber) {
+                Text(
+                    text = "Mode akses: ${privilegeStatus.activeExecutionMode}",
+                    color = NeonAmber,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = "ADB tersambung: ${if (privilegeStatus.isAdbConnected) "YA (port ${privilegeStatus.adbPort})" else "BELUM"}",
+                    color = if (privilegeStatus.isAdbConnected) NeonEmerald else TermMuted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Aktifkan 'Wireless debugging' + 'Pair device with pairing code' di Opsi Pengembang. Port pairing BEDA dengan port koneksi.",
+                    color = TermMuted,
+                    fontSize = 10.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = adbPairPort,
+                        onValueChange = { adbPairPort = it },
+                        label = { Text("Port pairing", fontSize = 10.sp) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("field_adb_pair_port")
+                    )
+                    OutlinedTextField(
+                        value = adbPairCode,
+                        onValueChange = { adbPairCode = it },
+                        label = { Text("Kode 6 digit", fontSize = 10.sp) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("field_adb_pair_code")
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { viewModel.adbPair(adbPairPort, adbPairCode) },
+                    enabled = !isAdbBusy,
+                    modifier = Modifier.fillMaxWidth().height(40.dp).testTag("btn_adb_pair"),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                    border = BorderStroke(1.dp, NeonAmber)
+                ) {
+                    Text("PAIR PERANGKAT", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = adbConnPort,
+                    onValueChange = { adbConnPort = it },
+                    label = { Text("Port koneksi (opsional)", fontSize = 10.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("field_adb_conn_port")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.adbAutoConnect() },
+                        enabled = !isAdbBusy,
+                        modifier = Modifier.weight(1f).height(40.dp).testTag("btn_adb_auto"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonEmerald)
+                    ) {
+                        Text("AUTO CONNECT", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    Button(
+                        onClick = { viewModel.adbConnect(adbConnPort) },
+                        enabled = !isAdbBusy,
+                        modifier = Modifier.weight(1f).height(40.dp).testTag("btn_adb_connect"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonCyan)
+                    ) {
+                        Text("CONNECT", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { viewModel.adbGrantSecureSettings() },
+                    enabled = !isAdbBusy && privilegeStatus.isAdbConnected,
+                    modifier = Modifier.fillMaxWidth().height(40.dp).testTag("btn_adb_grant"),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                    border = BorderStroke(1.dp, NeonViolet)
+                ) {
+                    Text("GRANT WRITE_SECURE_SETTINGS", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+                adbStatusMessage?.let { msg ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = msg, color = NeonCyan, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 }
             }
         }

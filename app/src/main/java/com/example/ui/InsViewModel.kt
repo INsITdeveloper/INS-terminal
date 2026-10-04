@@ -1009,33 +1009,52 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             settingsPersistence.saveNetworkState(_networkState.value)
-            val script = netEngine.generateUltraSignalAndStreamingScript(_networkState.value)
-            shellEngine.runRootProcess(script, "/storage/emulated/0", System.currentTimeMillis())
+            applySignalBoostProfile("Dual-Channel Wi-Fi + seluler")
             logSystemAction("📶 [DUAL-CHANNEL SIGNAL BOOSTER UNLOCKED]\n• Wi-Fi TX Power & Anti-Jitter [BOOSTED]\n• Data Seluler 4G/5G CA & Zero Radio Sleep [UNLOCKED]\n• Dual-Channel Link Turbo Concurrency [ACTIVE]\n• Latency: ${ping}ms")
+        }
+    }
+
+    /**
+     * Terapkan profil penguat sinyal yang KOMPATIBEL dengan kombinasi toggle aktif.
+     * Ini yang memperbaiki bug "dua-duanya dihidupkan jadi aneh": engine memilih satu profil
+     * koheren (Wi-Fi / seluler / dual / auto) alih-alih menembak setting yang saling menimpa.
+     */
+    private fun applySignalBoostProfile(reason: String) {
+        val state = _networkState.value
+        val mode = state.resolveBoostMode()
+        signalLocker.setBoostMode(mode)
+        viewModelScope.launch(Dispatchers.IO) {
+            val script = netEngine.generateUltraSignalAndStreamingScript(state, mode)
+            val (ok, report) = privilegeEngine.executePrivilegedScript(script)
+            logSystemAction(
+                "📶 Profil sinyal: ${mode.label}\n" +
+                    "• $reason\n" +
+                    "• Hasil: ${if (ok) "DITERAPKAN" else "SEBAGIAN/PERLU IZIN"}\n" +
+                    report.lines().take(14).joinToString("\n")
+            )
         }
     }
 
     fun toggleDualChannelSignalBoost(enabled: Boolean) {
         _networkState.update { it.copy(isDualChannelSignalBoostEnabled = enabled) }
         settingsPersistence.saveNetworkState(_networkState.value)
-        if (enabled) {
-            viewModelScope.launch(Dispatchers.IO) {
-                val script = netEngine.generateUltraSignalAndStreamingScript(_networkState.value)
-                shellEngine.runRootProcess(script, "/storage/emulated/0", System.currentTimeMillis())
-            }
-        }
+        applySignalBoostProfile(
+            if (enabled) "Dual-Channel Wi-Fi + 4G/5G" else "Dual-Channel dinonaktifkan, kembali ke AUTO"
+        )
         logSystemAction(if (enabled) "📶 Dual-Channel Wi-Fi + 4G/5G Signal Link [UNLOCKED]" else "Dual-Channel Booster [STANDBY]")
     }
 
     fun toggleWifiSignalBooster(enabled: Boolean) {
         _networkState.update { it.copy(isWifiSignalBoosterActive = enabled) }
         settingsPersistence.saveNetworkState(_networkState.value)
+        applySignalBoostProfile(if (enabled) "Wi-Fi low-latency & anti-jitter" else "Wi-Fi booster dinonaktifkan")
         logSystemAction(if (enabled) "📶 Wi-Fi Low Latency & Radio Sleep Bypass [ACTIVE]" else "Wi-Fi Booster [STOCK]")
     }
 
     fun toggleCellularSignalBooster(enabled: Boolean) {
         _networkState.update { it.copy(isCellularSignalBoosterActive = enabled) }
         settingsPersistence.saveNetworkState(_networkState.value)
+        applySignalBoostProfile(if (enabled) "Seluler 4G/5G anti-dormancy" else "Seluler booster dinonaktifkan")
         logSystemAction(if (enabled) "📶 Cellular Data 4G/5G Carrier Aggregation [BOOSTED]" else "Cellular Booster [STOCK]")
     }
 
@@ -1378,6 +1397,76 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         logSystemAction("📋 Perintah ADB disalin ke clipboard:\n${_privilegeStatus.value.adbGrantCommand}")
     }
 
+    // ── ADB Nirkabel (Wireless debugging) ─────────────────────────────────
+
+    val adbEngine = AdbShellEngine.getInstance(getApplication())
+
+    private val _adbStatusMessage = MutableStateFlow<String?>(null)
+    val adbStatusMessage: StateFlow<String?> = _adbStatusMessage.asStateFlow()
+
+    private val _isAdbBusy = MutableStateFlow(false)
+    val isAdbBusy: StateFlow<Boolean> = _isAdbBusy.asStateFlow()
+
+    fun adbPair(pairingPort: String, pairingCode: String) {
+        val port = pairingPort.trim().toIntOrNull()
+        if (port == null || port <= 0) {
+            _adbStatusMessage.value = "Port pairing tidak valid. Isi angka port yang muncul di layar 'Pair device with pairing code'."
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _isAdbBusy.value = true
+            val (ok, msg) = adbEngine.pair(port, pairingCode)
+            _adbStatusMessage.value = msg
+            if (ok) {
+                logSystemAction("🔗 ADB pairing berhasil (port $port). Lanjut: AUTO CONNECT atau CONNECT.")
+            } else {
+                logSystemAction("❌ ADB pairing gagal: $msg")
+            }
+            refreshPrivilegeStatus()
+            _isAdbBusy.value = false
+        }
+    }
+
+    fun adbAutoConnect() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isAdbBusy.value = true
+            val (ok, msg) = adbEngine.autoConnect()
+            _adbStatusMessage.value = msg
+            logSystemAction((if (ok) "✅ " else "❌ ") + msg)
+            refreshPrivilegeStatus()
+            _isAdbBusy.value = false
+        }
+    }
+
+    fun adbConnect(connectPort: String) {
+        val port = connectPort.trim().toIntOrNull()
+        if (port == null || port <= 0) {
+            _adbStatusMessage.value = "Port koneksi tidak valid. Port koneksi BEDA dengan port pairing."
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _isAdbBusy.value = true
+            val (ok, msg) = adbEngine.connect(port)
+            _adbStatusMessage.value = msg
+            logSystemAction((if (ok) "✅ " else "❌ ") + msg)
+            refreshPrivilegeStatus()
+            _isAdbBusy.value = false
+        }
+    }
+
+    fun adbGrantSecureSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isAdbBusy.value = true
+            val (ok, msg) = adbEngine.grantSecureSettings()
+            _adbStatusMessage.value = msg
+            logSystemAction((if (ok) "✅ " else "❌ ") + msg)
+            refreshPrivilegeStatus()
+            _isAdbBusy.value = false
+        }
+    }
+
+    fun adbPairingGuide(): String = adbEngine.pairingGuide()
+
     fun applySuperLowSignalOptimizer() {
         viewModelScope.launch(Dispatchers.IO) {
             val res = privilegeEngine.applySuperLowSignalOptimizer()
@@ -1391,6 +1480,7 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             settingsPersistence.saveNetworkState(_networkState.value)
+            signalLocker.setBoostMode(_networkState.value.resolveBoostMode())
             logSystemAction(res.second)
         }
     }
@@ -1497,6 +1587,42 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         settingsPersistence.saveDisplayState(_displayState.value)
         logSystemAction("Display density scaled to ${dpi} DPI")
     }
+
+    // ── HD Screenshot & HD Recording (resolusi native, lossless) ──────────
+
+    val hdCaptureEngine = HdCaptureEngine(getApplication())
+
+    private val _hdCaptureResult = MutableStateFlow<HdCaptureResult?>(null)
+    val hdCaptureResult: StateFlow<HdCaptureResult?> = _hdCaptureResult.asStateFlow()
+
+    private val _isHdRecording = MutableStateFlow(false)
+    val isHdRecording: StateFlow<Boolean> = _isHdRecording.asStateFlow()
+
+    fun captureHdScreenshot() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = hdCaptureEngine.captureHdScreenshot()
+            _hdCaptureResult.value = res
+            logSystemAction(res.message)
+        }
+    }
+
+    fun toggleHdRecording(start: Boolean, bitrateMbps: Int = 24) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = if (start) {
+                val r = hdCaptureEngine.startHdRecording(bitrateMbps)
+                _isHdRecording.value = r.isSuccess
+                r
+            } else {
+                val r = hdCaptureEngine.stopHdRecording()
+                _isHdRecording.value = false
+                r
+            }
+            _hdCaptureResult.value = res
+            logSystemAction(res.message)
+        }
+    }
+
+    fun hdCaptureInfo(): String = hdCaptureEngine.describe()
 
     fun toggleImmersiveMode(enabled: Boolean) {
         _displayState.update { it.copy(isImmersiveMode = enabled) }
@@ -1991,10 +2117,21 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Dipanggil oleh selector Hz di UI. Sebelumnya hanya mengubah state (jadi terlihat "tidak work").
+     * Sekarang langsung menerapkan: mode display jendela (MainActivity) + setting sistem via privilege.
+     */
     fun setDisplayRefreshRate(hz: Int) {
-        _displayState.update { it.copy(refreshRateHz = hz) }
-        settingsPersistence.saveDisplayState(_displayState.value)
-        logSystemAction("🖥️ Kecepatan Refresh Layar disetel ke: ${hz}Hz")
+        val maxHz = displayCaps.value.maxHardwareRefreshRate
+        val clamped = hz.coerceAtMost(if (maxHz > 0) maxHz else hz)
+        setRefreshRate(clamped)
+        if (hz > clamped) {
+            logSystemAction(
+                "⚠️ ${hz}Hz melebihi batas panel ${clamped}Hz — dikunci ke ${clamped}Hz (batas fisik layar)."
+            )
+        } else {
+            logSystemAction("🖥️ Kecepatan Refresh Layar diterapkan: ${clamped}Hz")
+        }
     }
 
     fun runQuickCacheCleanup() {

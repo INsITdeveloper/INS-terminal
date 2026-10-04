@@ -22,3 +22,8 @@ app/build/
 build/
 .aistudio/
 metadata.json
+
+# Signing keys — JANGAN pernah di-commit
+*.jks
+*.keystore
+my-upload-key.jks
