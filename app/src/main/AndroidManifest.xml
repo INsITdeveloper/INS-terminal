@@ -106,6 +106,17 @@
         <receiver
             android:name=".service.AdbPairingCodeReceiver"
             android:exported="false" />
+
+        <service
+            android:name=".service.HdCaptureTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_bolt"
+            android:label="HD Screenshot"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

@@ -941,7 +941,7 @@ fun TweaksScreen(
         item {
             CyberCard(borderColor = NeonCyan) {
                 Text(
-                    text = "Screenshot PNG lossless di resolusi panel penuh (tanpa downscale, tidak pecah saat di-zoom). Rekaman MP4 H.264 bitrate tinggi.",
+                    text = "Screenshot PNG lossless di resolusi panel penuh (tanpa downscale, tidak pecah saat di-zoom). Rekaman MP4 H.264 bitrate tinggi.\n\nTips: tambahkan tile \"HD Screenshot\" di panel Quick Settings (edit panel → tahan & geser) supaya bisa screenshot HD sekali tap seperti tombol sistem.",
                     color = TermMuted,
                     fontSize = 11.sp
                 )
