@@ -1230,6 +1230,55 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         logSystemAction(if (disabled) "Thermal Throttling FPS Governor [DISABLED - MAX PERFORMANCE]" else "Thermal Throttling [STOCK]")
     }
 
+    // ── Game Anti-Stutter Boost (NYATA — jalan lewat Shizuku/ADB/root) ──────
+
+    val gameBoostEngine = GameBoostEngine(getApplication())
+
+    private val _gameBoostResult = MutableStateFlow<GameBoostResult?>(null)
+    val gameBoostResult: StateFlow<GameBoostResult?> = _gameBoostResult.asStateFlow()
+
+    private val _gameBoostTarget = MutableStateFlow("")
+    val gameBoostTarget: StateFlow<String> = _gameBoostTarget.asStateFlow()
+
+    private val _isGameBoostBusy = MutableStateFlow(false)
+    val isGameBoostBusy: StateFlow<Boolean> = _isGameBoostBusy.asStateFlow()
+
+    fun setGameBoostTarget(value: String) {
+        _gameBoostTarget.value = value
+    }
+
+    fun detectForegroundGame() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val pkg = gameBoostEngine.currentForegroundPackage()
+            if (pkg != null) {
+                _gameBoostTarget.value = pkg
+                logSystemAction("🎯 App di layar terdeteksi: $pkg")
+            } else {
+                logSystemAction("🎯 Tidak bisa mendeteksi app di layar. Aktifkan Shizuku/ADB, atau isi nama paket game manual.")
+            }
+        }
+    }
+
+    fun applyGameBoostNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isGameBoostBusy.value = true
+            val res = gameBoostEngine.applyGameBoost(_gameBoostTarget.value.ifBlank { null })
+            _gameBoostResult.value = res
+            logSystemAction(res.message)
+            _isGameBoostBusy.value = false
+        }
+    }
+
+    fun revertGameBoostNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isGameBoostBusy.value = true
+            val res = gameBoostEngine.revertGameBoost()
+            _gameBoostResult.value = res
+            logSystemAction(res.message)
+            _isGameBoostBusy.value = false
+        }
+    }
+
     fun executeCustomRootScript(script: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val start = System.currentTimeMillis()
@@ -1538,7 +1587,10 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         settingsPersistence.saveDisplayState(_displayState.value)
         viewModelScope.launch(Dispatchers.IO) {
             val res = privilegeEngine.applyRealBufferAndSmoothness()
-            logSystemAction(res.second)
+            // Lanjutkan dengan Game Mode API + battery whitelist (anti-freeze game).
+            val boost = gameBoostEngine.applyGameBoost(_gameBoostTarget.value.ifBlank { null })
+            _gameBoostResult.value = boost
+            logSystemAction(res.second + "\n\n" + boost.message)
         }
     }
 

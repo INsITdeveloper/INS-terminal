@@ -59,6 +59,9 @@ fun TweaksScreen(
     var adbPairPort by remember { mutableStateOf("") }
     var adbPairCode by remember { mutableStateOf("") }
     var adbConnPort by remember { mutableStateOf("") }
+    val gameBoostResult by viewModel.gameBoostResult.collectAsState()
+    val gameBoostTarget by viewModel.gameBoostTarget.collectAsState()
+    val isGameBoostBusy by viewModel.isGameBoostBusy.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedTabApps by remember { mutableStateOf("ALL") }
@@ -1252,6 +1255,71 @@ fun TweaksScreen(
                     color = TermMuted,
                     fontSize = 10.sp
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // ── GAME ANTI-STUTTER (nyata, via Shizuku/ADB/root) ───────────────
+                CyberSectionTitle(
+                    title = "GAME ANTI-STUTTER (ANTI MACET & DELAY)",
+                    icon = Icons.Default.SportsEsports,
+                    accentColor = NeonEmerald
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Memakai Game Mode API + battery whitelist resmi Android (jalan via Shizuku/ADB, tanpa root). Game tidak lagi dibekukan sistem saat main -> frame drop/macet berkurang.",
+                    color = TermMuted,
+                    fontSize = 10.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = gameBoostTarget,
+                    onValueChange = { viewModel.setGameBoostTarget(it) },
+                    label = { Text("Paket game (opsional, mis. com.miHoYo.GenshinImpact)", fontSize = 9.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("field_game_boost_target")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.applyGameBoostNow() },
+                        enabled = !isGameBoostBusy,
+                        modifier = Modifier.weight(1f).height(40.dp).testTag("btn_game_boost_apply"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonEmerald.copy(alpha = 0.2f), contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonEmerald)
+                    ) {
+                        Text("BOOST SEKARANG", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    Button(
+                        onClick = { viewModel.detectForegroundGame() },
+                        enabled = !isGameBoostBusy,
+                        modifier = Modifier.height(40.dp).testTag("btn_game_boost_detect"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonCyan)
+                    ) {
+                        Text("DETEKSI", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    Button(
+                        onClick = { viewModel.revertGameBoostNow() },
+                        enabled = !isGameBoostBusy,
+                        modifier = Modifier.height(40.dp).testTag("btn_game_boost_revert"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonCrimson)
+                    ) {
+                        Text("REVERT", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                gameBoostResult?.let { result ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = result.message,
+                        color = if (result.isSuccess) NeonEmerald else NeonCrimson,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
