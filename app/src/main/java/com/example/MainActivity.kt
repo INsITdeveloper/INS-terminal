@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         )
+        requestNotificationPermissionIfNeeded()
         observeDisplayRefreshRate()
         setContent {
             MyApplicationTheme {
@@ -80,6 +81,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (_: Exception) {}
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
     }
 
     override fun onTrimMemory(level: Int) {

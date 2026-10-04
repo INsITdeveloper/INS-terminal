@@ -1017,6 +1017,51 @@ fun TweaksScreen(
                     fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.height(10.dp))
+
+                // ── Mode otomatis ala Shizuku: cari port via mDNS, minta kode lewat notifikasi ──
+                Button(
+                    onClick = { viewModel.startAdbAutoPairing() },
+                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("btn_adb_autopair"),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonAmber.copy(alpha = 0.22f),
+                        contentColor = TermWhite
+                    ),
+                    border = BorderStroke(1.dp, NeonAmber)
+                ) {
+                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp), tint = NeonAmber)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("PAIR OTOMATIS (KODE VIA NOTIFIKASI)", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.openWirelessDebuggingSettings() },
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("btn_adb_open_wd"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonCyan)
+                    ) {
+                        Text("BUKA WIRELESS DEBUGGING", fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    Button(
+                        onClick = { viewModel.stopAdbAutoPairing() },
+                        modifier = Modifier.height(38.dp).testTag("btn_adb_stop_pair"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurfaceDark, contentColor = TermWhite),
+                        border = BorderStroke(1.dp, NeonCrimson)
+                    ) {
+                        Text("STOP", fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Mode otomatis: app mencari port pairing sendiri, lalu kode diminta lewat notifikasi (tarik notifikasi → ketik 6 digit → KIRIM KODE). Cara manual ada di bawah.",
+                    color = TermMuted,
+                    fontSize = 10.sp
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = "Aktifkan 'Wireless debugging' + 'Pair device with pairing code' di Opsi Pengembang. Port pairing BEDA dengan port koneksi.",
                     color = TermMuted,

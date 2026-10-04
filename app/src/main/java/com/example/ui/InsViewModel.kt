@@ -1467,6 +1467,48 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun adbPairingGuide(): String = adbEngine.pairingGuide()
 
+    /**
+     * Mode pairing otomatis ala Shizuku: service mencari port pairing via mDNS,
+     * lalu meminta kode lewat notifikasi (inline reply).
+     */
+    fun startAdbAutoPairing() {
+        val app = getApplication<Application>()
+        com.example.service.AdbPairingService.start(app)
+        _adbStatusMessage.value =
+            "🪄 Mencari port pairing otomatis... Setelah muncul notifikasi, tarik ke bawah, ketik 6 digit kode, lalu KIRIM KODE."
+        logSystemAction("🪄 Pairing otomatis (ala Shizuku) dimulai — mencari pairing service via mDNS.")
+    }
+
+    fun stopAdbAutoPairing() {
+        val app = getApplication<Application>()
+        com.example.service.AdbPairingService.stop(app)
+        _adbStatusMessage.value = "Pencarian pairing dihentikan."
+    }
+
+    /** Buka layar "Wireless debugging" sedekat mungkin dengan versi OEM masing-masing. */
+    fun openWirelessDebuggingSettings() {
+        val app = getApplication<Application>()
+        val candidates = listOf(
+            android.content.Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS"),
+            android.content.Intent().setClassName(
+                "com.android.settings",
+                "com.android.settings.Settings\$WirelessDebuggingActivity"
+            ),
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+        )
+        for (intent in candidates) {
+            try {
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                app.startActivity(intent)
+                logSystemAction("Membuka layar Wireless Debugging / Opsi Pengembang.")
+                return
+            } catch (_: Exception) {
+            }
+        }
+        _adbStatusMessage.value =
+            "Tidak bisa membuka otomatis. Buka manual: Setelan → Sistem → Opsi pengembang → Penelusuran nirkabel."
+    }
+
     fun applySuperLowSignalOptimizer() {
         viewModelScope.launch(Dispatchers.IO) {
             val res = privilegeEngine.applySuperLowSignalOptimizer()
