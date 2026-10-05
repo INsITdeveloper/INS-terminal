@@ -324,6 +324,11 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         startAutoCacheClearDaemon()
         refreshInstalledApps()
 
+        // Auto-aktifkan penguat sinyal + carrier saat app dibuka, supaya tidak perlu
+        // tekan tombol manual tiap kali (nyaman & stabil). Bisa dimatikan kapan saja
+        // lewat tombol STOP di kartu Penguat Sinyal, atau lewat tile "INS Boost".
+        applyUltraSignalAndCinemaBoost()
+
         if (_perfState.value.isAutoCacheClearDaemonActive) {
             AutoCacheCleanerService.start(application, _perfState.value.autoCacheClearIntervalSec)
         }
