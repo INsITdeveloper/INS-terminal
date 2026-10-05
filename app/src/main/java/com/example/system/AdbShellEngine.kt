@@ -96,7 +96,14 @@ class AdbShellEngine private constructor(private val context: Context) {
                 lastMsg = "Pairing ditolak perangkat (via $host:$port)."
             } catch (e: Throwable) {
                 lastErrorValue = e.message
-                lastMsg = "Pairing gagal via $host:$port: ${e.message ?: e.javaClass.simpleName}"
+                val raw = e.message ?: e.javaClass.simpleName
+                lastMsg = if (raw.contains("NoSuchMethod") || raw.contains("Conscrypt", ignoreCase = true) || raw.contains("exportKeyingMaterial")) {
+                    "Pairing gagal: Android versi ini menutup API Conscrypt yang dipakai library ADB " +
+                        "(NoSuchMethod: exportKeyingMaterial). Ini bug library pada Android terbaru, bukan izin Anda.\n" +
+                        "Solusi: pakai Shizuku (start dari PC/root) atau root — keduanya tidak butuh pairing."
+                } else {
+                    "Pairing gagal via $host:$port: $raw"
+                }
             }
         }
         pairedFlag = false

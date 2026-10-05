@@ -245,7 +245,7 @@ class NetworkOptimizerEngine {
             [ -e /proc/sys/net/core/wmem_max ] && echo 16777216 > /proc/sys/net/core/wmem_max 2>/dev/null || true
             [ -e /proc/sys/net/core/optmem_max ] && echo 1048576 > /proc/sys/net/core/optmem_max 2>/dev/null || true
             [ -e /proc/sys/net/core/netdev_max_backlog ] && echo 5000 > /proc/sys/net/core/netdev_max_backlog 2>/dev/null || true
-            [ -e /proc/sys/net/ipv4/tcp_low_latency ] && echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
+            # tcp_low_latency SENGAJA TIDAK diset: menurunkan throughput (upload Mbps) pada jaringan modern.
         """.trimIndent()
 
         val wifiBlock = """
