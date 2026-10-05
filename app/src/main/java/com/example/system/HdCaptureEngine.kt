@@ -51,6 +51,16 @@ class HdCaptureEngine(private val context: Context) {
     var isRecording: Boolean = false
         private set
 
+    /** Ukuran file rekaman terakhir (byte). Dipakai untuk memastikan MP4 tidak 0 byte. */
+    @Volatile
+    var lastRecordingSize: Long = 0L
+        private set
+
+    /** Cuplikan output shell terakhir saat merekam (untuk pesan error yang jelas). */
+    @Volatile
+    var lastRecordingLog: String = ""
+        private set
+
     private val stamp: String
         get() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
@@ -158,21 +168,30 @@ class HdCaptureEngine(private val context: Context) {
         val out = "$dir/$name"
 
         isRecording = true
+        lastRecordingSize = 0L
+        lastRecordingLog = ""
         recordingJob = scope.launch {
             val script = """
                 mkdir -p "$dir" 2>/dev/null
+                rm -f "$out" 2>/dev/null
                 screenrecord --bit-rate $bitrate --time-limit $limit "$out"
-                echo "INS_REC_DONE"
-                if [ -s "$out" ]; then echo "INS_REC_SIZE=${'$'}(wc -c < "$out")"; else echo "INS_REC_SIZE=0"; fi
+                SZ=0
+                if [ -s "$out" ]; then SZ=${'$'}(wc -c < "$out" 2>/dev/null); fi
+                echo "INS_REC_SIZE=${'$'}SZ"
+                echo "SHELL_UID=${'$'}(id 2>/dev/null | head -c 60)"
             """.trimIndent()
-            val res = privilege.runBest(script, timeoutMs = (limit + 25) * 1000L)
+            val res = privilege.runBest(script, timeoutMs = (limit + 30) * 1000L)
             isRecording = false
+            lastRecordingLog = res.output
             val file = File(out)
-            if (file.exists() && file.length() > 1000) {
+            val size = if (file.exists()) file.length() else 0L
+            lastRecordingSize = size
+            if (size > 1000) {
                 copyToMediaStore(file, name, "video/mp4", "Movies/INS_HQ_Recordings")
                 scanToGallery(out)
+            } else {
+                android.util.Log.e("HdCaptureEngine", "rekaman 0 byte: ${res.output.takeLast(300)}")
             }
-            android.util.Log.d("HdCaptureEngine", "record finished: ${res.output.takeLast(200)}")
         }
 
         return HdCaptureResult(
@@ -187,11 +206,30 @@ class HdCaptureEngine(private val context: Context) {
 
     suspend fun stopHdRecording(): HdCaptureResult = withContext(Dispatchers.IO) {
         if (!isRecording) return@withContext HdCaptureResult(false, "Tidak ada rekaman yang berjalan.")
-        privilege.runBest("pkill -INT -f screenrecord 2>/dev/null; echo INS_REC_STOP", timeoutMs = 8_000L)
-        recordingJob?.cancel()
+        // Kirim SIGINT supaya screenrecord menutup MP4 dengan benar (menulis moov atom).
+        // PENTING: JANGAN cancel job rekaman — kalau di-cancel, MP4 bisa belum final
+        // dan file tidak tersalin ke Galeri. Kita tunggu job selesai dulu.
+        privilege.runBest("pkill -INT -f screenrecord 2>/dev/null; echo INS_REC_STOP", timeoutMs = 10_000L)
+        runCatching { recordingJob?.join() }
         recordingJob = null
         isRecording = false
-        HdCaptureResult(true, "■ Rekaman dihentikan. File tersimpan di folder INS_HQ_Recordings.")
+        val size = lastRecordingSize
+        if (size > 1000) {
+            HdCaptureResult(
+                isSuccess = true,
+                message = "■ Rekaman dihentikan. File MP4 tersimpan (${size / 1024} KB) di Movies/INS_HQ_Recordings."
+            )
+        } else {
+            HdCaptureResult(
+                isSuccess = false,
+                message = buildString {
+                    appendLine("✗ Rekaman gagal disimpan (file ${size} byte / kosong).")
+                    appendLine("  Pastikan jalur shell (Shizuku / ADB nirkabel / root) aktif, lalu coba lagi.")
+                    val uid = Regex("SHELL_UID=(.+").find(lastRecordingLog)?.groupValues?.get(1)
+                    if (!uid.isNullOrBlank()) appendLine("  Konteks proses: $uid")
+                }.trim()
+            )
+        }
     }
 
     private fun copyToMediaStore(file: File, displayName: String, mime: String, relativePath: String): Uri? {
