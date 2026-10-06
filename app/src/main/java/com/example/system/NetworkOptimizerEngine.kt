@@ -245,7 +245,13 @@ class NetworkOptimizerEngine {
             [ -e /proc/sys/net/core/wmem_max ] && echo 16777216 > /proc/sys/net/core/wmem_max 2>/dev/null || true
             [ -e /proc/sys/net/core/optmem_max ] && echo 1048576 > /proc/sys/net/core/optmem_max 2>/dev/null || true
             [ -e /proc/sys/net/core/netdev_max_backlog ] && echo 5000 > /proc/sys/net/core/netdev_max_backlog 2>/dev/null || true
-            # tcp_low_latency SENGAJA TIDAK diset: menurunkan throughput (upload Mbps) pada jaringan modern.
+            # ── LOW-LATENCY (dipercepat) — diaktifkan kembali sesuai permintaan ──
+            # TCP stack memprioritaskan latensi rendah (cocok untuk game/voip).
+            [ -e /proc/sys/net/ipv4/tcp_low_latency ] && echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
+            [ -e /proc/sys/net/ipv4/tcp_autocorking ] && echo 0 > /proc/sys/net/ipv4/tcp_autocorking 2>/dev/null || true
+            [ -e /proc/sys/net/ipv4/tcp_ecn ] && echo 1 > /proc/sys/net/ipv4/tcp_ecn 2>/dev/null || true
+            [ -e /proc/sys/net/ipv4/tcp_notsent_lowat ] && echo 16384 > /proc/sys/net/ipv4/tcp_notsent_lowat 2>/dev/null || true
+            [ -e /proc/sys/net/ipv4/tcp_timestamps ] && echo 1 > /proc/sys/net/ipv4/tcp_timestamps 2>/dev/null || true
         """.trimIndent()
 
         val wifiBlock = """

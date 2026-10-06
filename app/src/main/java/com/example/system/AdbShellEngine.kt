@@ -84,26 +84,33 @@ class AdbShellEngine private constructor(private val context: Context) {
 
         var lastMsg = "Pairing gagal."
         for (host in hosts) {
-            try {
-                manager.setHostAddress(host)
-                manager.setApi(Build.VERSION.SDK_INT)
-                val ok = manager.pair(port, clean)
-                if (ok) {
-                    pairedFlag = true
-                    lastErrorValue = null
-                    return true to "Pairing berhasil (via $host:$port)."
+            // adbd kadang belum siap menerima pairing; coba 3x per host dengan jeda.
+            for (attempt in 1..3) {
+                try {
+                    manager.setHostAddress(host)
+                    manager.setApi(Build.VERSION.SDK_INT)
+                    val ok = manager.pair(port, clean)
+                    if (ok) {
+                        pairedFlag = true
+                        lastErrorValue = null
+                        return true to "Pairing berhasil (via $host:$port)."
+                    }
+                    lastMsg = "Pairing ditolak perangkat (via $host:$port)."
+                } catch (e: Throwable) {
+                    lastErrorValue = e.message
+                    val raw = e.message ?: e.javaClass.simpleName
+                    lastMsg = if (raw.contains("NoSuchMethod") || raw.contains("Conscrypt", ignoreCase = true) || raw.contains("exportKeyingMaterial")) {
+                        "Pairing gagal: Android versi ini menutup API Conscrypt yang dipakai library ADB " +
+                            "(NoSuchMethod: exportKeyingMaterial). Ini bug library pada Android terbaru, bukan izin Anda.\n" +
+                            "Solusi: pakai Shizuku (start dari PC/root) atau root — keduanya tidak butuh pairing."
+                    } else if (raw.contains("ECONNREFUSED", ignoreCase = true) || raw.contains("Connection refused", ignoreCase = true)) {
+                        "Pairing gagal via $host:$port: koneksi ditolak. PASTIKAN dialog \"Pair device with pairing code\" MASIH TERBUKA " +
+                            "(kalau ditutup, server pairing langsung mati) dan port+kode diambil dari dialog yang SAMA."
+                    } else {
+                        "Pairing gagal via $host:$port: $raw"
+                    }
                 }
-                lastMsg = "Pairing ditolak perangkat (via $host:$port)."
-            } catch (e: Throwable) {
-                lastErrorValue = e.message
-                val raw = e.message ?: e.javaClass.simpleName
-                lastMsg = if (raw.contains("NoSuchMethod") || raw.contains("Conscrypt", ignoreCase = true) || raw.contains("exportKeyingMaterial")) {
-                    "Pairing gagal: Android versi ini menutup API Conscrypt yang dipakai library ADB " +
-                        "(NoSuchMethod: exportKeyingMaterial). Ini bug library pada Android terbaru, bukan izin Anda.\n" +
-                        "Solusi: pakai Shizuku (start dari PC/root) atau root — keduanya tidak butuh pairing."
-                } else {
-                    "Pairing gagal via $host:$port: $raw"
-                }
+                try { Thread.sleep(700L) } catch (_: InterruptedException) {}
             }
         }
         pairedFlag = false
@@ -120,47 +127,77 @@ class AdbShellEngine private constructor(private val context: Context) {
         }.distinct()
 
         var lastMsg = "Koneksi ke port $port ditolak."
-        for (host in hosts) {
-            try {
-                manager.setHostAddress(host)
-                manager.setApi(Build.VERSION.SDK_INT)
-                val ok = manager.connect(port)
-                if (ok) {
-                    connectedPortValue = port
-                    lastErrorValue = null
-                    return true to "Terhubung ke ADB $host:$port sebagai user shell (UID 2000)."
+        // Setelah pairing, adbd butuh beberapa saat untuk membuka port koneksi.
+        // Jadi kita coba beberapa kali dengan jeda sebelum menyerah.
+        for (round in 1..3) {
+            for (host in hosts) {
+                try {
+                    manager.setHostAddress(host)
+                    manager.setApi(Build.VERSION.SDK_INT)
+                    val ok = manager.connect(port)
+                    if (ok) {
+                        connectedPortValue = port
+                        lastErrorValue = null
+                        rememberPort(port)
+                        return true to "Terhubung ke ADB $host:$port sebagai user shell (UID 2000)."
+                    }
+                    lastMsg = "Koneksi ke $host:$port ditolak."
+                } catch (e: AdbPairingRequiredException) {
+                    lastErrorValue = e.message
+                    lastMsg = "Perangkat belum dipasangkan (via $host:$port)."
+                } catch (e: Throwable) {
+                    lastErrorValue = e.message
+                    lastMsg = "Gagal konek $host:$port: ${e.message ?: e.javaClass.simpleName}"
                 }
-                lastMsg = "Koneksi ke $host:$port ditolak."
-            } catch (e: AdbPairingRequiredException) {
-                lastErrorValue = e.message
-                lastMsg = "Perangkat belum dipasangkan (via $host:$port)."
-            } catch (e: Throwable) {
-                lastErrorValue = e.message
-                lastMsg = "Gagal konek $host:$port: ${e.message ?: e.javaClass.simpleName}"
             }
+            if (round < 3) { try { Thread.sleep(1200L) } catch (_: InterruptedException) {} }
         }
         return false to lastMsg
     }
 
+    // ── Simpan port koneksi terakhir supaya bisa dicoba lagi tanpa mDNS ──
+    private val prefs by lazy {
+        context.getSharedPreferences("ins_adb", Context.MODE_PRIVATE)
+    }
+
+    private fun rememberPort(port: Int) {
+        runCatching { prefs.edit().putInt("last_connect_port", port).apply() }
+    }
+
+    fun lastKnownPort(): Int = runCatching { prefs.getInt("last_connect_port", -1) }.getOrDefault(-1)
+
     fun autoConnect(timeoutMs: Long = 8000L): Pair<Boolean, String> {
         if (!isSupported()) return false to "ADB nirkabel butuh Android 11 ke atas."
-        return try {
+        // 1) Coba lewat mDNS (paling andal saat wireless debugging baru dinyalakan).
+        try {
             manager.setHostAddress("127.0.0.1")
             manager.setApi(Build.VERSION.SDK_INT)
-            val ok = manager.autoConnect(context, timeoutMs)
-            if (ok) {
+            if (manager.autoConnect(context, timeoutMs)) {
                 lastErrorValue = null
-                true to "Terhubung otomatis lewat penemuan mDNS."
-            } else {
-                false to "Perangkat tidak ditemukan lewat mDNS. Isi port secara manual."
+                return true to "Terhubung otomatis lewat penemuan mDNS."
             }
         } catch (e: AdbPairingRequiredException) {
             lastErrorValue = e.message
-            false to "Perangkat ditemukan tetapi belum dipasangkan. Jalankan: adb pair <port> <kode>"
         } catch (e: Throwable) {
             lastErrorValue = e.message
-            false to "Auto-connect gagal: ${e.message ?: e.javaClass.simpleName}"
         }
+
+        // 2) Fallback: coba port koneksi yang terakhir berhasil.
+        val known = lastKnownPort()
+        if (known > 0) {
+            val (ok, msg) = connect(known)
+            if (ok) return ok to "$msg (port terakhir yang tersimpan)"
+        }
+
+        // 3) Fallback terakhir: cari endpoint connect via mDNS lalu sambung langsung.
+        val ep = AdbMdnsDiscovery.discoverConnectEndpoint(context, timeoutMs)
+        if (ep != null && ep.port > 0) {
+            val (ok, msg) = connect(ep.port, ep.host)
+            if (ok) return ok to msg
+        }
+
+        return false to "ADB tidak ditemukan otomatis. Pastikan 'Penelusuran nirkabel' MENYALA " +
+            "(perangkat harus Wi-Fi), lalu PAIR OTOMATIS lagi (port & kode baru)."
     }
 
     fun disconnect(): Pair<Boolean, String> {

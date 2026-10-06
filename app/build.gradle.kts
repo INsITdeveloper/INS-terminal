@@ -17,10 +17,16 @@ android {
     applicationId = "com.ins.terminal"
     minSdk = 24
     targetSdk = 36
-    versionCode = 9
-    versionName = "1.9"
+    versionCode = 11
+    versionName = "1.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Hanya ABI HP (ARM). Buang x86/x86_64 (buat emulator/PC) supaya APK lebih kecil
+    // dan lebih sedikit entri native lib.
+    ndk {
+      abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+    }
   }
 
   signingConfigs {
@@ -32,6 +38,11 @@ android {
         storePassword = System.getenv("STORE_PASSWORD")
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
         keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("STORE_PASSWORD")
+        // Pakai SEMUA skema tanda tangan (v1 + v2 + v3) supaya kompatibel
+        // dengan semua installer/OEM (v1 JAR signing membantu installer yang rewel).
+        enableV1Signing = true
+        enableV2Signing = true
+        enableV3Signing = true
       }
     }
   }
