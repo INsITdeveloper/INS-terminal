@@ -324,6 +324,10 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
         startAutoCacheClearDaemon()
         refreshInstalledApps()
 
+        // 🧹 PERBAIKAN TAMPILAN: buang sisa tweak setprop debug.* berbahaya dari versi
+        // lama (penyebab layar hitam + garis-garis). Dijalankan tiap app dibuka.
+        repairDisplayTweaks()
+
         // Auto-aktifkan penguat sinyal + carrier saat app dibuka, supaya tidak perlu
         // tekan tombol manual tiap kali (nyaman & stabil). Bisa dimatikan kapan saja
         // lewat tombol STOP di kartu Penguat Sinyal, atau lewat tile "INS Boost".
@@ -862,6 +866,21 @@ class InsViewModel(application: Application) : AndroidViewModel(application) {
             val script = netEngine.generateUltraSignalAndStreamingScript(_networkState.value)
             shellEngine.runRootProcess(script, "/storage/emulated/0", System.currentTimeMillis())
             logSystemAction("📶 Sinyal & Network Stack Tuned: 5G/4G Carrier Aggregation, Cloudflare DNS, BBR Buffer & Video Streaming Accelerator Aktif. Latency: ${ping}ms")
+        }
+    }
+
+    /**
+     * 🧹 Membatalkan sisa tweak display BERBAHAYA dari versi lama
+     * (debug.hwui.renderer, debug.composition.type, debug.egl.swapinterval,
+     * debug.sf.latch_unsignaled, wm density, dll) yang membuat layar hitam + garis-garis.
+     */
+    private fun repairDisplayTweaks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val script = dispEngine.generateDisplayResetScript()
+                privilegeEngine.runBest(script, 25_000L)
+                logSystemAction("🧹 Perbaikan tampilan dijalankan (sisa tweak berbahaya dibersihkan).")
+            }
         }
     }
 

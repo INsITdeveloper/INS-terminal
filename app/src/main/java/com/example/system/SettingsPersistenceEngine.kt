@@ -273,12 +273,14 @@ class SettingsPersistenceEngine(private val context: Context) {
 
     fun loadCustomScript(): String {
         val defaultScript = """
-            # 🚀 Universal Ultra Game HD & 120 FPS Script
-            setprop debug.egl.force_msaa 1
-            setprop debug.hwui.renderer skiavk
+            # 🚀 Universal Ultra Game HD & 120 FPS Script (AMAN — tanpa setprop debug.*)
             settings put system peak_refresh_rate 120.0
+            settings put system min_refresh_rate 120.0
             settings put global peak_refresh_rate 120.0
-            sync
+            settings put global min_refresh_rate 120.0
+            settings put global window_animation_scale 0.5
+            settings put global transition_animation_scale 0.5
+            settings put global animator_duration_scale 0.5
         """.trimIndent()
         return prefs.getString(KEY_CUSTOM_SCRIPT, defaultScript) ?: defaultScript
     }

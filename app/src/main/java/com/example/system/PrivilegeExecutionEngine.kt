@@ -184,9 +184,10 @@ class PrivilegeExecutionEngine private constructor(private val context: Context)
 
 
     fun runShell(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): ShellResult =
-        runProcess(listOf("sh", "-c", script), asRoot = false, timeoutMs = timeoutMs)
+        runProcess(listOf("sh", "-c", ScriptSanitizer.sanitize(script)), asRoot = false, timeoutMs = timeoutMs)
 
     fun runRoot(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): ShellResult {
+        val script = ScriptSanitizer.sanitize(script)
         val su = resolveSuBinary()
             ?: return ShellResult(
                 success = false, viaRoot = true, exitCode = -1, output = "",
@@ -198,6 +199,7 @@ class PrivilegeExecutionEngine private constructor(private val context: Context)
     }
 
     fun runBest(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): ShellResult {
+        val script = ScriptSanitizer.sanitize(script)
         if (isDeviceRooted()) return runRoot(script, timeoutMs)
         val shz = shizuku()
         if (shz.canExecute()) {
@@ -213,10 +215,10 @@ class PrivilegeExecutionEngine private constructor(private val context: Context)
     }
 
     fun runShizuku(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): ShellResult =
-        shizuku().runShell(script, timeoutMs)
+        shizuku().runShell(ScriptSanitizer.sanitize(script), timeoutMs)
 
     fun runAdb(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): ShellResult =
-        adb().runShell(script, timeoutMs)
+        adb().runShell(ScriptSanitizer.sanitize(script), timeoutMs)
 
     private fun runProcess(args: List<String>, asRoot: Boolean, timeoutMs: Long): ShellResult {
         var process: Process? = null
@@ -826,16 +828,15 @@ class PrivilegeExecutionEngine private constructor(private val context: Context)
             settings put global window_animation_scale 0.5
             settings put global transition_animation_scale 0.5
             settings put global animator_duration_scale 0.5
-            setprop debug.sf.latch_unsignaled 1 2>/dev/null || true
         """.trimIndent()
 
         val rootRes = if (isDeviceRooted()) runRoot(script, timeoutMs = 12_000L) else null
         if (rootRes != null && rootRes.success) {
-            applied += "SurfaceFlinger latch_unsignaled via root"
+            applied += "Animation scale 0.5x via root"
         } else if (rootRes != null) {
-            failed += "SurfaceFlinger tuning: ${rootRes.error ?: "exit ${rootRes.exitCode}"}"
+            failed += "Animation scale: ${rootRes.error ?: "exit ${rootRes.exitCode}"}"
         } else {
-            failed += "SurfaceFlinger/GPU frame pacing (butuh root)"
+            failed += "Animation scale (butuh izin tulis settings)"
         }
 
         val report = buildString {

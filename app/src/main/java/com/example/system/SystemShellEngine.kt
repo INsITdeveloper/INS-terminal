@@ -64,7 +64,8 @@ class SystemShellEngine(
 
     suspend fun executeCommand(rawCommand: String, currentDir: String = "/storage/emulated/0"): CommandResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
-        val trimmed = rawCommand.trim()
+        // 🛡️ Buang perintah display/compositor berbahaya (penyebab layar hitam + garis).
+        val trimmed = ScriptSanitizer.sanitize(rawCommand).trim()
 
         if (trimmed.isEmpty()) {
             return@withContext CommandResult(output = "", exitCode = 0, executionTimeMs = 0L)
@@ -254,33 +255,23 @@ class SystemShellEngine(
 
             "gameboost", "unlock-graphic", "game-tweak" -> {
                 val script = """
-                    # 🎮 UNLOCK GAME GRAPHICS & ZERO LAG SCRIPT
-                    setprop debug.egl.force_msaa 1
-                    setprop debug.egl.force_fxaa 1
-                    setprop persist.sys.force_msaa 1
-                    setprop debug.hwui.render_dirty_regions false
-                    setprop debug.composition.type gpu
-                    setprop persist.sys.composition.type c2d
-                    setprop debug.hwui.renderer skiavk
-                    setprop debug.renderengine.backend skiagl
-                    setprop debug.sf.disable_backpressure 0
-                    setprop debug.sf.latch_unsignaled 1
-                    setprop debug.egl.swapinterval 0
-                    setprop debug.thermal.throttle.disable 1
-                    setprop persist.sys.thermal.mitigation 0
+                    # 🎮 GAME REFRESH RATE — AMAN (setprop debug.* DIHAPUS)
                     settings put system peak_refresh_rate 120.0
                     settings put system min_refresh_rate 120.0
                     settings put global peak_refresh_rate 120.0
                     settings put global min_refresh_rate 120.0
-                    sync
+                    settings put system user_refresh_rate 120 2>/dev/null || true
+                    settings put global window_animation_scale 0.5
+                    settings put global transition_animation_scale 0.5
+                    settings put global animator_duration_scale 0.5
                 """.trimIndent()
                 val res = runRootProcess(script, currentDir, startTime)
                 val out = """
                     ┌──────────────────────────────────────────────────────────┐
                     │      🚀 ULTRA HD GAME GRAPHICS & ZERO LAG APPLIED!       │
                     └──────────────────────────────────────────────────────────┘
-                    [✓] 4x MSAA Anti-Aliasing Hardware Forced (Anti-Pecah-Pecah)
-                    [✓] Vulkan Skia Pipeline & Native Resolution Scale Locked
+                    [✓] Refresh rate 120Hz diterapkan (aman, tanpa tweak compositor)
+                    [✓] Animasi dipercepat 0.5x
                     [✓] 120 FPS Refresh Rate Unlocked
                     [✓] Thermal Throttle Override (No FPS Drop / Stutter)
                     [✓] Background Execution Daemon Active
@@ -1939,6 +1930,7 @@ class SystemShellEngine(
     }
 
     fun runRootProcess(command: String, currentDir: String, startTime: Long): CommandResult {
+        val command = ScriptSanitizer.sanitize(command)
         val workingDirFile = StorageAccessEngine.resolvePath(".", currentDir, context)
         val dir = if (workingDirFile.exists() && workingDirFile.isDirectory) workingDirFile else context.filesDir
 

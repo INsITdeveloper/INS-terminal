@@ -59,6 +59,20 @@ data class DisplaySystemState(
     val isAntiLagTripleBufferingActive: Boolean = true
 )
 
+/**
+ * ⚠️ PENTING — kenapa file ini "hanya settings put":
+ *
+ * Versi lama menulis banyak `setprop debug.*` (debug.hwui.renderer skiavk,
+ * debug.composition.type gpu, debug.egl.swapinterval 0, debug.sf.latch_unsignaled,
+ * debug.egl.force_msaa, dll), `service call SurfaceFlinger ...`, dan `wm density`.
+ *
+ * Itu semua BUKAN tweak performa — itu flag DEBUG internal Android. Menyalakannya
+ * merusak compositor/HWUI sehingga layar jadi HITAM dengan GARIS-GARIS aneh saat
+ * membuka game/WhatsApp, dan `wm density` membuat koordinat sentuhan ngaco.
+ *
+ * Jadi sekarang SEMUA script display hanya memakai perintah `settings put` yang aman.
+ * (Selain itu ada ScriptSanitizer yang membuang baris berbahaya dari script apa pun.)
+ */
 class DisplaySystemEngine {
 
     fun checkDisplayCapabilities(context: Context): DisplayCapabilities {
@@ -129,85 +143,106 @@ class DisplaySystemEngine {
         )
     }
 
+    /** Hanya perintah AMAN: set refresh rate + animasi. Tanpa setprop debug.* apa pun. */
+    private fun refreshRateCommands(targetHz: Int, animationScale: Float? = null): String {
+        return buildString {
+            if (animationScale != null) {
+                appendLine("settings put global window_animation_scale $animationScale")
+                appendLine("settings put global transition_animation_scale $animationScale")
+                appendLine("settings put global animator_duration_scale $animationScale")
+            }
+            appendLine("settings put system peak_refresh_rate ${targetHz}.0")
+            appendLine("settings put system min_refresh_rate ${targetHz}.0")
+            appendLine("settings put global peak_refresh_rate ${targetHz}.0")
+            appendLine("settings put global min_refresh_rate ${targetHz}.0")
+            appendLine("settings put system user_refresh_rate $targetHz 2>/dev/null || true")
+            appendLine("settings put system custom_refresh_rate $targetHz 2>/dev/null || true")
+            appendLine("settings put system refresh_rate_mode 2 2>/dev/null || true")
+            appendLine("settings put system user_refresh_rate_mode 2 2>/dev/null || true")
+            appendLine("settings put secure speed_mode 1 2>/dev/null || true")
+            appendLine("settings put system oplus_customize_refresh_rate 1 2>/dev/null || true")
+            appendLine("settings put secure refresh_rate_setting 3 2>/dev/null || true")
+            appendLine("settings put system vivo_screen_refresh_rate 2 2>/dev/null || true")
+            appendLine("settings put system fps_limit $targetHz 2>/dev/null || true")
+        }.trimEnd()
+    }
+
     fun generateFpsUnlockScript(targetHz: Int): String {
         return """
-            # 🚀 HIGH-REFRESH RATE GAMING FPS UNLOCKER & ULTRA HD GRAPHICS ENGINE
-            # Target Frequency: ${targetHz}Hz (Zero Lag / Ultra Crisp HD Resolution Preserved)
-
-            # Universal Android Window Manager Refresh Rates
-            settings put system peak_refresh_rate ${targetHz}.0
-            settings put system min_refresh_rate ${targetHz}.0
-            settings put global peak_refresh_rate ${targetHz}.0
-            settings put global min_refresh_rate ${targetHz}.0
-            settings put secure speed_mode 1 2>/dev/null
-            settings put system refresh_rate_mode 2 2>/dev/null
-            settings put system custom_refresh_rate $targetHz 2>/dev/null
-            settings put system user_refresh_rate $targetHz 2>/dev/null
-            settings put system user_refresh_rate_mode 2 2>/dev/null
-            settings put system oplus_customize_refresh_rate 1 2>/dev/null
-            settings put secure refresh_rate_setting 3 2>/dev/null
-            settings put system vivo_screen_refresh_rate 2 2>/dev/null
-            settings put system fps_limit $targetHz 2>/dev/null
-
-            # 💎 ULTRA HD GRAPHICS PRESERVATION (ANTI-BLUR & FULL TEXTURE SHARPNESS)
-            setprop debug.egl.force_msaa 1
-            setprop debug.egl.force_fxaa 1
-            setprop persist.sys.force_msaa 1
-            setprop debug.hwui.disable_draw_defer 1
-            setprop debug.composition.type gpu
-            setprop persist.sys.composition.type gpu
-            setprop debug.sf.disable_backpressure 0
-            setprop debug.sf.latch_unsignaled 1
-            setprop debug.choreographer.skipwarning 0
-            setprop debug.egl.hw 1
-            setprop persist.sys.fps.unlock 1
-            setprop persist.sys.game.fps.lock 0
-            setprop ro.surface_flinger.max_frame_buffer_acquired_buffers 3
-            setprop vendor.display.enable_default_color_mode 1
-            setprop debug.hwui.renderer skiavk
-            setprop debug.sf.enable_gl_backpressure 0
+            # 🚀 REFRESH RATE (FPS) — hanya perintah AMAN
+            # Target: ${targetHz}Hz
+            ${refreshRateCommands(targetHz)}
         """.trimIndent()
     }
 
     fun generateUltraHdCrispScript(): String {
         return """
-            # 🎮 ULTRA HD SHARP TEXTURES & ANTI-ALIASING ENGINE (NO RESOLUTION DOWNSCALE)
-            setprop debug.egl.force_msaa 1
-            setprop debug.egl.force_fxaa 1
-            setprop persist.sys.force_msaa 1
-            setprop debug.hwui.disable_draw_defer 1
-            setprop debug.composition.type gpu
-            setprop persist.sys.composition.type gpu
-            setprop debug.hwui.render_dirty_regions false
-            setprop debug.egl.profiler 0
-            setprop debug.sf.early.app.duration 1600000
-            setprop debug.sf.earlyGl.app.duration 1600000
-            setprop vendor.display.enable_default_color_mode 1
-            setprop debug.renderengine.backend skiagl
-            setprop debug.hwui.renderer skiavk
+            # 🎮 HD / ANTI-BLUR — hanya perintah AMAN.
+            # Semua setprop debug.* (renderer/compositor/msaa) DIHAPUS karena merusak tampilan.
             settings put secure sysui_haptic_feedback_multiplier 1.5
-            sync
+            settings put global window_animation_scale 0.5
+            settings put global transition_animation_scale 0.5
+            settings put global animator_duration_scale 0.5
         """.trimIndent()
     }
 
     fun generateDefaultFallbackScript(): String {
         return """
-            # 🛡️ RESTORE DEFAULT SAFE 60HZ / OEM STANDARD DISPLAY BASELINE
+            # 🛡️ RESTORE DEFAULT AMAN
             settings put system peak_refresh_rate 60.0
             settings put system min_refresh_rate 60.0
             settings put global peak_refresh_rate 60.0
             settings put global min_refresh_rate 60.0
-            settings put system user_refresh_rate 60 2>/dev/null
-            settings put system custom_refresh_rate 60 2>/dev/null
-            settings put system refresh_rate_mode 0 2>/dev/null
-            settings put secure speed_mode 0 2>/dev/null
+            settings delete system user_refresh_rate 2>/dev/null || true
+            settings delete system custom_refresh_rate 2>/dev/null || true
+            settings put system refresh_rate_mode 0 2>/dev/null || true
+            settings put secure speed_mode 0 2>/dev/null || true
+        """.trimIndent()
+    }
 
-            # Restore standard compositor swap interval
-            setprop debug.egl.swapinterval 1
-            setprop debug.gr.swapinterval 1
-            setprop debug.sf.disable_backpressure 1
-            setprop debug.sf.latch_unsignaled 0
-            setprop persist.sys.fps.unlock 0
+    /**
+     * 🧹 REPAIR — membatalkan sisa tweak tampilan BERBAHAYA dari versi lama.
+     * Dijalankan otomatis sekali saat app dibuka, supaya HP yang sudah terlanjur
+     * "keracunan" prop debug.* (layar hitam + garis) langsung pulih.
+     */
+    fun generateDisplayResetScript(): String {
+        return """
+            # 🧹 PERBAIKAN TAMPILAN — buang sisa tweak berbahaya
+            wm density reset 2>/dev/null || true
+            settings delete system peak_refresh_rate 2>/dev/null || true
+            settings delete system min_refresh_rate 2>/dev/null || true
+            settings delete global peak_refresh_rate 2>/dev/null || true
+            settings delete global min_refresh_rate 2>/dev/null || true
+            settings delete system user_refresh_rate 2>/dev/null || true
+            settings delete system custom_refresh_rate 2>/dev/null || true
+            settings delete system fps_limit 2>/dev/null || true
+            settings put system refresh_rate_mode 0 2>/dev/null || true
+            settings put secure speed_mode 0 2>/dev/null || true
+
+            setprop debug.hwui.renderer "" 2>/dev/null || true
+            setprop debug.renderengine.backend "" 2>/dev/null || true
+            setprop debug.composition.type "" 2>/dev/null || true
+            setprop persist.sys.composition.type "" 2>/dev/null || true
+            setprop debug.egl.swapinterval 1 2>/dev/null || true
+            setprop debug.gr.swapinterval 1 2>/dev/null || true
+            setprop debug.egl.force_msaa 0 2>/dev/null || true
+            setprop debug.egl.force_fxaa 0 2>/dev/null || true
+            setprop persist.sys.force_msaa 0 2>/dev/null || true
+            setprop debug.hwui.disable_draw_defer 0 2>/dev/null || true
+            setprop debug.hwui.render_dirty_regions true 2>/dev/null || true
+            setprop debug.sf.latch_unsignaled 0 2>/dev/null || true
+            setprop debug.sf.disable_backpressure 1 2>/dev/null || true
+            setprop debug.sf.enable_gl_backpressure 1 2>/dev/null || true
+            setprop persist.sys.thermal.mitigation 1 2>/dev/null || true
+            setprop debug.thermal.throttle.disable 0 2>/dev/null || true
+            setprop persist.vendor.touch.sampling_rate "" 2>/dev/null || true
+            setprop debug.performance.tuning 0 2>/dev/null || true
+            setprop persist.sys.fps.unlock 0 2>/dev/null || true
+            setprop persist.sys.game.fps.lock 1 2>/dev/null || true
+            settings put global game_driver_all_apps 0 2>/dev/null || true
+            settings put global updatable_driver_all_apps 0 2>/dev/null || true
+            settings put global game_driver_opt_in_apps 0 2>/dev/null || true
+            echo "DISPLAY_REPAIR_DONE"
         """.trimIndent()
     }
 
@@ -223,9 +258,7 @@ class DisplaySystemEngine {
 
             val appliedProps = listOf(
                 "settings put peak_refresh_rate ${desiredHz}.0",
-                "debug.egl.swapinterval -> 0",
-                "debug.sf.latch_unsignaled -> 1",
-                "persist.sys.fps.unlock -> 1",
+                "settings put min_refresh_rate ${desiredHz}.0",
                 "OEM Refresh Mode -> Forced ($desiredHz Hz)"
             )
 
@@ -262,102 +295,18 @@ class DisplaySystemEngine {
         return FpsUnlockResult(
             isSuccess = true,
             targetFps = 60,
-            appliedProperties = listOf("settings put peak_refresh_rate 60.0", "debug.egl.swapinterval -> 1"),
+            appliedProperties = listOf("settings put peak_refresh_rate 60.0", "refresh_rate_mode -> 0"),
             isFallbackApplied = true,
             message = "[✓] Fallback Applied: Display refresh rate & compositor restored to standard 60Hz baseline.",
             hardwareCapabilities = caps
         )
     }
 
+    /** Tweak tampilan AMAN (hanya settings put) — dipakai PersistentBoosterService tiap 45s. */
     fun generateDisplayTweaksScript(state: DisplaySystemState): String {
         return """
-            # Universal Display, Game Graphic Unblur & FPS Unlock Engine (All Android Devices)
-            settings put global window_animation_scale ${state.animationScale}
-            settings put global transition_animation_scale ${state.animationScale}
-            settings put global animator_duration_scale ${state.animationScale}
-
-            # Universal Force Max Refresh Rate (60Hz / 90Hz / 120Hz / 144Hz)
-            settings put system peak_refresh_rate ${state.refreshRateHz}.0
-            settings put system min_refresh_rate ${state.refreshRateHz}.0
-            settings put global peak_refresh_rate ${state.refreshRateHz}.0
-            settings put global min_refresh_rate ${state.refreshRateHz}.0
-            # OEM specific refresh rate bypass (Samsung, Xiaomi/HyperOS, Realme/Oppo/OnePlus, Vivo, Asus ROG)
-            settings put system refresh_rate_mode 2 2>/dev/null
-            settings put system custom_refresh_rate ${state.refreshRateHz} 2>/dev/null
-            settings put system user_refresh_rate ${state.refreshRateHz} 2>/dev/null
-            settings put system user_refresh_rate_mode 2 2>/dev/null
-            settings put secure speed_mode 1 2>/dev/null
-            settings put system power_mode 0 2>/dev/null
-            settings put system oplus_customize_refresh_rate 1 2>/dev/null
-            settings put secure refresh_rate_setting 3 2>/dev/null
-            settings put system vivo_screen_refresh_rate 2 2>/dev/null
-            settings put system fps_limit ${state.refreshRateHz} 2>/dev/null
-            service call SurfaceFlinger 1035 i32 1 2>/dev/null
-
-            wm density ${state.dpiDensity}
-
-            # 🎮 ULTRA HD GAME GRAPHICS & ANTI-PECAH-PECAH (ANTI-ALIASING)
-            setprop debug.egl.force_msaa ${if (state.isAntiAliasing4xMsaaEnabled) 1 else 0}
-            setprop debug.egl.force_fxaa ${if (state.isAntiAliasing4xMsaaEnabled) 1 else 0}
-            setprop persist.sys.force_msaa ${if (state.isAntiAliasing4xMsaaEnabled) 1 else 0}
-            setprop debug.hwui.render_dirty_regions false
-            setprop debug.composition.type gpu
-            setprop persist.sys.composition.type c2d
-
-            # 💎 NATIVE RESOLUTION LOCK & TEXTURE SHARPNESS
-            setprop debug.hwui.disable_draw_defer ${if (state.isGameNativeResolutionLocked) 1 else 0}
-            setprop debug.sf.disable_backpressure 0
-            setprop debug.sf.latch_unsignaled 1
-            setprop debug.choreographer.skipwarning 0
-            setprop debug.egl.hw 1
-            setprop debug.egl.profiler 0
-            setprop debug.egl.swapinterval 0
-
-            # 🚀 VULKAN SKIA PIPELINE & ZERO SHADER STUTTER
-            setprop debug.hwui.renderer skiavk
-            setprop debug.renderengine.backend skiagl
-            setprop debug.sf.early.app.duration 1600000
-            setprop debug.sf.earlyGl.app.duration 1600000
-            setprop debug.cpurend.vsync true
-            setprop ro.config.hw_quickpoweron 0
-
-            # ❄️ THERMAL THROTTLING OVERRIDE FOR ZERO FPS DROP
-            setprop debug.thermal.throttle.disable ${if (state.isThermalThrottlingDisabled) 1 else 0}
-            setprop persist.sys.thermal.mitigation ${if (state.isThermalThrottlingDisabled) 0 else 1}
-
-            # ⚡ TOUCH SAMPLING RATIO & ZERO LATENCY INPUT POLLING
-            setprop persist.vendor.touch.sampling_rate ${state.touchSamplingRatioHz}
-            setprop debug.touch.latency_reduction ${if (state.isTouchLatencyReductionEnabled) 1 else 0}
-            settings put secure sysui_haptic_feedback_multiplier 1.5
-
-            # 🎮 UNLOCK GAME GRAPHICS & EXTREME FPS (MLBB, PUBG, GENSHIN, FF MAX, COD)
-            ${if (state.isGameGraphicUnlockerActive) """
-            # Force System Game Driver & Updatable Driver
-            settings put global game_driver_all_apps 1
-            settings put global updatable_driver_all_apps 1
-            settings put global game_driver_opt_in_apps 1
-            setprop persist.sys.game.graphic_unlock 1
-            setprop ro.vendor.game.turbo 1
-            setprop persist.sys.gamemode.fps 120
-            setprop persist.sys.fps.unlock 1
-            setprop persist.sys.game.fps.lock 0
-            setprop debug.stagefright.fps 120
-
-            # Bypass OEM Game Limiters (Xiaomi Joyose, Samsung GOS, ColorOS Game Space)
-            setprop persist.sys.joyose.disabled 1
-            setprop persist.sys.gos.disabled 1
-            setprop persist.sys.oem.game_limit 0
-
-            # Anti-Lag Triple Buffering & Frame Pacing Stabilizer (Eliminate occasional micro-stutters)
-            setprop ro.surface_flinger.max_frame_buffer_acquired_buffers 3
-            setprop debug.sf.latch_unsignaled 1
-            setprop debug.sf.disable_backpressure 0
-            setprop debug.sf.enable_gl_backpressure 0
-            setprop debug.sf.early.phase.offset_ns 500000
-            setprop debug.sf.early.app.phase.offset_ns 500000
-            """.trimIndent() else ""}
-            # [OK] Ultra HD Game Graphics, Anti-Aliasing, Vulkan Pipelines & Zero Lag Configured!
+            # Universal Display & FPS — hanya perintah AMAN (tanpa setprop debug.* / service call / wm density)
+            ${refreshRateCommands(state.refreshRateHz, state.animationScale)}
         """.trimIndent()
     }
 }
-

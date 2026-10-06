@@ -199,14 +199,9 @@ class AutoCacheCleanerService : Service() {
                 totalAccumulatedFreedMb += res.freedMb
 
                 try {
-                    val script = """
-                        setprop debug.egl.force_msaa 1
-                        setprop debug.hwui.renderer skiavk
-                        setprop debug.composition.type gpu
-                        setprop debug.thermal.throttle.disable 1
-                        sync
-                    """.trimIndent()
-                    ProcessBuilder("sh", "-c", script).start().waitFor()
+                    // setprop debug.* DIHAPUS — dulu ini yang membuat layar hitam + garis.
+                    // Auto cache cleaner tidak perlu menyentuh compositor sama sekali.
+                    ProcessBuilder("sh", "-c", "sync").start().waitFor()
                 } catch (_: Exception) {}
 
                 val timeStr = formatCurrentTime()

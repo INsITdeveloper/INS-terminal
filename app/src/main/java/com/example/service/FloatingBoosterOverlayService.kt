@@ -338,11 +338,12 @@ class FloatingBoosterOverlayService : Service() {
                     withContext(Dispatchers.IO) {
                         try {
                             CacheCleanerEngine.cleanCaches(applicationContext)
-                            val script = "setprop debug.egl.force_msaa 1; settings put system peak_refresh_rate 120.0; sync"
+                            // setprop debug.egl.force_msaa DIHAPUS — penyebab layar hitam/artefak.
+                            val script = "settings put system peak_refresh_rate 120.0; settings put system min_refresh_rate 120.0; settings put global peak_refresh_rate 120.0; settings put global min_refresh_rate 120.0"
                             ProcessBuilder("sh", "-c", script).start().waitFor()
                         } catch (_: Exception) {}
                     }
-                    Toast.makeText(applicationContext, "🚀 TURBO 120 FPS & 4x MSAA DITERAPKAN!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, "🚀 Refresh rate 120Hz diterapkan!", Toast.LENGTH_SHORT).show()
                 }
             }
         }

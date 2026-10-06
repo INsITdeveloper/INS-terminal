@@ -121,21 +121,14 @@ class PerformanceGovernorEngine {
 
             # 🎯 3. EAS / SCHEDULER PRIORITY & THREAD PINNING (Anti-Lag / Anti-Jank)
             setprop sys.use_fifo_ui 1
-            setprop debug.hwui.fps_divisor 1
-            setprop debug.sf.showfps 0
-            setprop debug.composition.type gpu
-            setprop persist.sys.composition.type gpu
-            setprop debug.performance.tuning 1
-            setprop debug.sf.latch_unsignaled 1
-            setprop ro.surface_flinger.max_frame_buffer_acquired_buffers 3
             echo 1 > /proc/sys/kernel/sched_boost 2>/dev/null || true
             echo 0 > /proc/sys/kernel/sched_energy_aware 2>/dev/null || true
 
-            # 🛡️ 4. THERMAL THROTTLING BYPASS (Zero Sudden FPS Drops)
-            setprop debug.thermal.throttle.disable 1
-            setprop persist.sys.thermal.mitigation 0
-            stop thermal-engine 2>/dev/null || true
-            stop thermald 2>/dev/null || true
+            # 🛡️ 4. THERMAL
+            # setprop debug.thermal.* / persist.sys.thermal.mitigation DIHAPUS:
+            # (a) prop debug.* compositor/thermal inilah penyebab layar hitam + garis,
+            # (b) persist.* bertahan setelah reboot dan bisa membuat HP overheat.
+            # Tweak thermal berbasis sysfs di atas sudah cukup dan bisa dibalik.
 
             # 💾 5. MEMORY SWAPPINESS & VIRTUAL MEMORY TUNING
             echo $swappiness > /proc/sys/vm/swappiness 2>/dev/null
